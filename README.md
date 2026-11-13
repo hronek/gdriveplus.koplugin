@@ -21,6 +21,8 @@ This is a fork of [moohaad/gdrive.koplugin](https://github.com/moohaad/gdrive.ko
 - **Faster open/close.** Folder and file ids are cached, and closing a book
   with no new annotations makes no annotation request at all.
 - Reading progress only jumps to a *newer* position from *another* device.
+- Browsing reaches shared content: a *Shared with me* entry, shortcuts are
+  followed, and shared drives are supported.
 - Timeouts on every request, proper URL encoding, folders with more than 100
   files, downloads streamed to disk.
 - The file format is documented in [SYNC_FORMAT.md](SYNC_FORMAT.md) and covered
@@ -84,7 +86,7 @@ The two files give full access to your Google Drive. Keep them private.
 | Sync this book now | Merges annotations with Drive and pushes the reading position |
 | Push / Pull reading progress | Explicit one-way sync of the position |
 | Sync vocabulary | Newest copy of the vocabulary builder database wins |
-| Browse Google Drive | Download books to the device |
+| Browse Google Drive | Download books to the device — from My Drive, *Shared with me*, shortcuts to shared folders and shared drives |
 
 With the default settings everything happens automatically when a book is
 opened (after 3 seconds) and closed, if Wi-Fi is on. *Sync this book now* is

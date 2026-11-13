@@ -14,6 +14,11 @@ local TOKEN_URL = "https://oauth2.googleapis.com/token"
 local API = "https://www.googleapis.com/drive/v3/files"
 local UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 M.FOLDER_MIME = "application/vnd.google-apps.folder"
+M.SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+--- Pseudo folder id for the "Shared with me" view.
+M.SHARED_WITH_ME = "sharedWithMe"
+-- Needed on every call so that files on shared drives are reachable.
+local ALL_DRIVES = "supportsAllDrives=true"
 
 local function api_error(body, code, status)
     local msg
@@ -106,7 +111,7 @@ function M.query(token, q, fields, order_by, max_items)
     local files = {}
     local page_token
     repeat
-        local url = API .. "?pageSize=200&spaces=drive"
+        local url = API .. "?pageSize=200&spaces=drive&includeItemsFromAllDrives=true&" .. ALL_DRIVES
             .. "&fields=" .. utils.urlencode("nextPageToken,files(" .. (fields or "id,name,mimeType,modifiedTime,size") .. ")")
             .. "&q=" .. utils.urlencode(q)
         if order_by then url = url .. "&orderBy=" .. utils.urlencode(order_by) end
@@ -142,14 +147,32 @@ function M.findByProperty(token, key, value, parent_id)
     return files[1]
 end
 
+--- List a folder. Shortcuts are resolved to the file or folder they point to,
+--- so folders shared by other people (which appear in My Drive only as
+--- shortcuts) can be opened like any other folder.
+--- @param folder_id  nil/"root" for My Drive, M.SHARED_WITH_ME for shared items
 function M.listFiles(token, folder_id)
-    local q = string.format("'%s' in parents and trashed = false", utils.q_escape(folder_id or "root"))
-    return M.query(token, q, "id,name,mimeType,size", "folder,name")
+    local q
+    if folder_id == M.SHARED_WITH_ME then
+        q = "sharedWithMe = true and trashed = false"
+    else
+        q = string.format("'%s' in parents and trashed = false", utils.q_escape(folder_id or "root"))
+    end
+    local files, err = M.query(token, q,
+        "id,name,mimeType,size,shortcutDetails(targetId,targetMimeType)", "folder,name")
+    if not files then return nil, err end
+    for _, f in ipairs(files) do
+        local target = f.mimeType == M.SHORTCUT_MIME and f.shortcutDetails
+        if type(target) == "table" and target.targetId then
+            f.id, f.mimeType = target.targetId, target.targetMimeType
+        end
+    end
+    return files
 end
 
 function M.createFolder(token, name, parent_id)
     local data, err = json_request({
-        url = API .. "?fields=id",
+        url = API .. "?fields=id&" .. ALL_DRIVES,
         method = "POST",
         headers = auth(token, { ["Content-Type"] = "application/json; charset=UTF-8" }),
         body = gjson.encode({
@@ -173,7 +196,7 @@ end
 --- Download a file's content into memory.
 function M.download(token, file_id)
     return M.request({
-        url = string.format("%s/%s?alt=media", API, utils.urlencode(file_id)),
+        url = string.format("%s/%s?alt=media&%s", API, utils.urlencode(file_id), ALL_DRIVES),
         headers = auth(token, { ["Accept"] = "*/*" }),
     })
 end
@@ -184,7 +207,7 @@ function M.downloadToFile(token, file_id, dest_path)
     local f = io.open(tmp, "wb")
     if not f then return false, "cannot write " .. dest_path end
     local ok, err = M.request({
-        url = string.format("%s/%s?alt=media", API, utils.urlencode(file_id)),
+        url = string.format("%s/%s?alt=media&%s", API, utils.urlencode(file_id), ALL_DRIVES),
         headers = auth(token, { ["Accept"] = "*/*" }),
         sink = ltn12.sink.file(f),
     })
@@ -207,10 +230,10 @@ function M.upload(token, args)
     local metadata = { name = args.name, appProperties = args.app_properties }
     local url, method
     if args.id then
-        url = string.format("%s/%s?uploadType=multipart&fields=id", UPLOAD, utils.urlencode(args.id))
+        url = string.format("%s/%s?uploadType=multipart&fields=id&%s", UPLOAD, utils.urlencode(args.id), ALL_DRIVES)
         method = "PATCH"
     else
-        url = UPLOAD .. "?uploadType=multipart&fields=id"
+        url = UPLOAD .. "?uploadType=multipart&fields=id&" .. ALL_DRIVES
         method = "POST"
         metadata.parents = args.parent_id and { args.parent_id } or nil
     end

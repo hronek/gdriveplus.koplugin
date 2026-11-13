@@ -691,6 +691,17 @@ function GDriveSync:browse(folder_id, folder_name)
                 end,
             })
         end
+        if not folder_id then
+            -- Items other people shared are not inside "My Drive"; offer them separately.
+            table.insert(items, {
+                text = "▸ " .. _("Shared with me"),
+                callback = function()
+                    table.insert(self.history, { id = folder_id, name = folder_name })
+                    UIManager:close(self.current_menu)
+                    self:browse(network.SHARED_WITH_ME, _("Shared with me"))
+                end,
+            })
+        end
         for _, file in ipairs(files) do
             local is_folder = file.mimeType == network.FOLDER_MIME
             table.insert(items, {
