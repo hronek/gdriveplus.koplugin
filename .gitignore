@@ -5,3 +5,6 @@
 # Test/dev artifacts
 *.metadata.lua
 
+
+# Local build output
+dist/
