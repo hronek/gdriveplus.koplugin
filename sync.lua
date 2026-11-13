@@ -76,13 +76,25 @@ local function apply_to_reader(ctx, list)
     local ann = ui.annotation
     local sorted = false
     if type(ann.sortItems) == "function" then
+        -- KOReader's comparator switches PDF reflow off while it runs; if it
+        -- fails part-way the setting must be put back.
+        local conf = ui.document and ui.document.configurable
+        local text_wrap = conf and conf.text_wrap
         local ok, err = pcall(ann.sortItems, ann, list)
         sorted = ok
-        if not ok then logger.warn("GDrivePlus: KOReader sort failed, using fallback:", err) end
+        if not ok then
+            if conf then conf.text_wrap = text_wrap end
+            logger.warn("GDrivePlus: KOReader sort failed, using fallback:", err)
+        end
     end
     if not sorted then annotations.fallback_sort(list, ctx.paging) end
 
     ann.annotations = list
+    -- KOReader caches the boxes it has drawn per page; without this, highlights
+    -- that just arrived would not appear until the book is reopened.
+    if ui.view and type(ui.view.resetHighlightBoxesCache) == "function" then
+        pcall(ui.view.resetHighlightBoxesCache, ui.view)
+    end
     pcall(ann.onSaveSettings, ann)
     if ui.doc_settings and type(ui.doc_settings.flush) == "function" then
         pcall(ui.doc_settings.flush, ui.doc_settings)

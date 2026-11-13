@@ -65,6 +65,12 @@ Common fields: `text` (highlighted text), `note`, `chapter`, `pageno`,
 
 An entry without `pos0`/`pos1` is a page bookmark; it has no `drawer`.
 
+KOReader draws a PDF highlight from `pos0` and `pos1` (it looks up the words at
+those two points and everything between them), so they must lie inside the
+first and the last highlighted word, and both need a numeric `page`. `pboxes`
+is what KOReader computed at the time of highlighting; other readers draw from
+it directly.
+
 PDF coordinates are in page space at zoom 1: PDF points, origin at the top-left
 corner of the page's crop box, y growing downwards. `zoom` and `rotation` only
 record the view state at the time of highlighting; a writer that has no view

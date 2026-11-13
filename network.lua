@@ -57,7 +57,12 @@ function M.request(params)
     end
 
     if ok_su then
-        socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
+        -- Whole files get the longer "file" timeouts; a stalled connection still gives up.
+        if params.file_transfer then
+            socketutil:set_timeout(socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT)
+        else
+            socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
+        end
     end
     local ok, code, headers, status = pcall(function()
         return socket.skip(1, http.request(req))
@@ -210,6 +215,7 @@ function M.downloadToFile(token, file_id, dest_path)
         url = string.format("%s/%s?alt=media&%s", API, utils.urlencode(file_id), ALL_DRIVES),
         headers = auth(token, { ["Accept"] = "*/*" }),
         sink = ltn12.sink.file(f),
+        file_transfer = true,
     })
     if not ok then
         os.remove(tmp)
@@ -250,6 +256,7 @@ function M.upload(token, args)
         method = method,
         headers = auth(token, { ["Content-Type"] = "multipart/related; boundary=" .. boundary }),
         body = body,
+        file_transfer = #args.content > 256 * 1024,
     })
     if not data then return nil, err end
     if not data.id then return nil, "upload returned no id" end

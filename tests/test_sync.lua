@@ -105,7 +105,7 @@ local function new_device(file_name, paging, list)
             isXPointerInDocument = function(_, xp) return not xp:find("BAD", 1, true) end,
         },
         doc_settings = { flush = function() end },
-        view = { dialog = {} },
+        view = { dialog = {}, resetHighlightBoxesCache = function() dev.cache_resets = (dev.cache_resets or 0) + 1 end },
     }
     dev.ctx = function(name)
         return {
@@ -180,14 +180,22 @@ ok, res = sync.run(drive.net, "tok", kindle.ctx())
 check(ok and res.pulled, "second device pulls")
 eq(texts(kindle.ui.annotation.annotations), "a,b,c", "all three highlights arrive, incl. same-x on another page")
 eq(kindle.saved, 1, "reader settings saved once")
+eq(kindle.cache_resets, 1, "KOReader's drawn-highlight cache is cleared")
 eq(kindle.ui.annotation.annotations[1].text, "a", "list is sorted by position")
 
 -- 4. KOReader's own sort crashing must not fail the sync ----------------------
 local third = new_device("Moje kniha.pdf", true, {})
 third.sort_fails = true
+third.ui.document.configurable = { text_wrap = 1 }
+local real_sort = third.ui.annotation.sortItems
+third.ui.annotation.sortItems = function(self, items)
+    third.ui.document.configurable.text_wrap = 0 -- as KOReader does before comparing
+    return real_sort(self, items)
+end
 ok, res = sync.run(drive.net, "tok", third.ctx())
 check(ok and res.pulled, "sync survives a failing KOReader sort")
 eq(#third.ui.annotation.annotations, 3, "fallback sort keeps all entries")
+eq(third.ui.document.configurable.text_wrap, 1, "PDF reflow setting is restored after a failed sort")
 
 -- 5. Delete on one device, add on the other -----------------------------------
 table.remove(kindle.ui.annotation.annotations, 1) -- delete "a"
