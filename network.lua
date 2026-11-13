@@ -47,7 +47,7 @@ function M.request(params)
         headers = params.headers or {},
         sink = params.sink or ltn12.sink.table(chunks),
     }
-    req.headers["User-Agent"] = "KOReader/GDriveSync"
+    req.headers["User-Agent"] = "KOReader/GDrivePlus"
     if not req.headers["Accept"] then req.headers["Accept"] = "application/json" end
     if params.body then
         req.source = ltn12.source.string(params.body)
@@ -237,7 +237,7 @@ function M.upload(token, args)
         method = "POST"
         metadata.parents = args.parent_id and { args.parent_id } or nil
     end
-    local boundary = "gdrivesync_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+    local boundary = "gdriveplus_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
     local body = "--" .. boundary .. "\r\n"
         .. "Content-Type: application/json; charset=UTF-8\r\n\r\n"
         .. gjson.encode(metadata) .. "\r\n"

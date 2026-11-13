@@ -1,4 +1,4 @@
-# Google Drive Sync for KOReader
+# Google Drive Plus for KOReader
 
 Two-way sync of highlights, notes, bookmarks, reading progress and vocabulary
 between KOReader devices through your own Google Drive — and with the
@@ -36,10 +36,10 @@ should have automatic sync enabled.
 ## Install
 
 **From Storefront or App Store** (inside KOReader): search for
-`gdrivesync.koplugin`.
+`gdriveplus.koplugin`.
 
-**Manually**: download `gdrivesync.koplugin.zip` from
-[Releases](../../releases), unzip it, and copy the `gdrivesync.koplugin` folder
+**Manually**: download `gdriveplus.koplugin.zip` from
+[Releases](../../releases), unzip it, and copy the `gdriveplus.koplugin` folder
 into KOReader's `plugins` folder:
 
 | Device | Folder |
@@ -48,7 +48,7 @@ into KOReader's `plugins` folder:
 | Kobo | `/mnt/onboard/.adds/koreader/plugins/` |
 | Android | `koreader/plugins/` on internal storage |
 
-Restart KOReader. The plugin is under **Tools → Google Drive Sync**.
+Restart KOReader. The plugin is under **Tools → Google Drive Plus**.
 
 ## Set up Google access
 
@@ -72,9 +72,9 @@ set up the original plugin, skip this — its credentials are reused.
 5. Select the scope `https://www.googleapis.com/auth/drive`, authorise, press
    *Exchange authorization code for tokens*, and save the **refresh token**
    into `refresh_token.txt`.
-6. Copy both files into a `gdrivesync` folder inside KOReader's folder
-   (for example `/mnt/onboard/.adds/koreader/gdrivesync/`).
-7. In KOReader: *Google Drive Sync → Settings → Load client ID* and
+6. Copy both files into a `gdriveplus` folder inside KOReader's folder
+   (for example `/mnt/onboard/.adds/koreader/gdriveplus/`).
+7. In KOReader: *Google Drive Plus → Settings → Load client ID* and
    *Load refresh token*.
 
 The two files give full access to your Google Drive. Keep them private.
@@ -98,7 +98,7 @@ also available as a gesture action.
   was revoked. Create a new one (step 4–5); see step 2 about *Testing* status.
 - **Any other failure** — *Settings → Show last error* shows the reason. The
   full details, including a stack trace for internal errors, are in KOReader's
-  `crash.log` on lines starting with `GDriveSync:`.
+  `crash.log` on lines starting with `GDrivePlus:`.
 - **A folder was deleted on Drive** — *Settings → Forget cached Drive folders*.
 
 ## Development
@@ -112,7 +112,7 @@ luajit tests/test_sync.lua
 ```
 
 To release: bump `version` in `_meta.lua`, commit, and push a matching tag
-(`v2.0.1`). The workflow runs the tests and attaches `gdrivesync.koplugin.zip`
+(`v1.0.1`). The workflow runs the tests and attaches `gdriveplus.koplugin.zip`
 to a GitHub Release, which is what Storefront and App Store install.
 
 ## Licence

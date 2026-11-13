@@ -88,7 +88,7 @@ local tmp_root = os.getenv("TEMP") or os.getenv("TMPDIR") or "."
 local sdr_counter = 0
 local function new_device(file_name, paging, list)
     sdr_counter = sdr_counter + 1
-    local sdr = tmp_root .. "/gdrivesync_test_" .. os.time() .. "_" .. sdr_counter
+    local sdr = tmp_root .. "/gdriveplus_test_" .. os.time() .. "_" .. sdr_counter
     -- no mkdir in plain Lua: use the directory itself as a file-name prefix
     local dev = { saved = 0, sort_calls = 0 }
     dev.ui = {
@@ -119,7 +119,7 @@ local function new_device(file_name, paging, list)
     return dev
 end
 
--- sync.lua writes "<sdr_dir>/gdrivesync.json"; make that a flat temp file name.
+-- sync.lua writes "<sdr_dir>/gdriveplus.json"; make that a flat temp file name.
 sync.BASE_NAME = "base.json"
 local real_write, real_read = utils.write_file, utils.read_json
 local store = {}

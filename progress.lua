@@ -107,7 +107,7 @@ function M.push(network, token, ctx)
     if not id then return false, "upload: " .. tostring(err) end
     ctx.cache.prog_id = id
     ctx.cache.progress_ts = now
-    logger.dbg("GDriveSync: pushed progress", cur.percentage)
+    logger.dbg("GDrivePlus: pushed progress", cur.percentage)
     return true
 end
 

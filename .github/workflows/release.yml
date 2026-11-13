@@ -30,12 +30,12 @@ jobs:
 
       - name: Package plugin
         run: |
-          mkdir -p gdrivesync.koplugin
-          cp _meta.lua main.lua annotations.lua gjson.lua network.lua progress.lua sync.lua utils.lua LICENSE README.md SYNC_FORMAT.md gdrivesync.koplugin/
-          zip -r gdrivesync.koplugin.zip gdrivesync.koplugin/
+          mkdir -p gdriveplus.koplugin
+          cp _meta.lua main.lua annotations.lua gjson.lua network.lua progress.lua sync.lua utils.lua LICENSE README.md SYNC_FORMAT.md gdriveplus.koplugin/
+          zip -r gdriveplus.koplugin.zip gdriveplus.koplugin/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: gdrivesync.koplugin.zip
+          files: gdriveplus.koplugin.zip
           generate_release_notes: true

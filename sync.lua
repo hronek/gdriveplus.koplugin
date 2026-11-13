@@ -1,7 +1,7 @@
 --- Annotation sync: download, 3-way merge, apply to KOReader, upload.
 ---
 --- Remote layout:  KOReader_Sync/annotations/<book file name>.json
---- Local snapshot: <book>.sdr/gdrivesync.json  (state after the last successful sync)
+--- Local snapshot: <book>.sdr/gdriveplus.json  (state after the last successful sync)
 
 local annotations = require("annotations")
 local gjson = require("gjson")
@@ -10,7 +10,7 @@ local utils = require("utils")
 
 local M = {}
 
-M.BASE_NAME = "gdrivesync.json"
+M.BASE_NAME = "gdriveplus.json"
 
 --- Locate the remote file for this book.
 --- Order: cached id → by name → by content hash (book was renamed) → legacy <hash>.json.
@@ -78,7 +78,7 @@ local function apply_to_reader(ctx, list)
     if type(ann.sortItems) == "function" then
         local ok, err = pcall(ann.sortItems, ann, list)
         sorted = ok
-        if not ok then logger.warn("GDriveSync: KOReader sort failed, using fallback:", err) end
+        if not ok then logger.warn("GDrivePlus: KOReader sort failed, using fallback:", err) end
     end
     if not sorted then annotations.fallback_sort(list, ctx.paging) end
 
@@ -137,7 +137,7 @@ local function do_sync(network, token, ctx)
             make_xpointer_check(ctx, local_list))
         stats.invalid = #skipped
         for _, s in ipairs(skipped) do
-            logger.warn("GDriveSync: skipping remote annotation", s.key, "-", s.reason)
+            logger.warn("GDrivePlus: skipping remote annotation", s.key, "-", s.reason)
         end
         -- Skipped entries stay in the sync file; only apply if the valid part differs.
         if not annotations.same_live(annotations.to_map(list), local_map) then
@@ -168,7 +168,7 @@ local function do_sync(network, token, ctx)
     end
 
     if not utils.write_file(ctx.sdr_dir .. "/" .. M.BASE_NAME, doc_json) then
-        logger.warn("GDriveSync: cannot write snapshot in", ctx.sdr_dir)
+        logger.warn("GDrivePlus: cannot write snapshot in", ctx.sdr_dir)
     end
     return true, stats
 end
@@ -184,11 +184,11 @@ function M.run(network, token, ctx)
         return tostring(e) .. "\n" .. debug.traceback()
     end)
     if not ok then
-        logger.warn("GDriveSync: annotation sync crashed:", res)
+        logger.warn("GDrivePlus: annotation sync crashed:", res)
         return false, "internal error: " .. tostring(res):match("^[^\n]*")
     end
     if not res then
-        logger.warn("GDriveSync: annotation sync failed:", detail)
+        logger.warn("GDrivePlus: annotation sync failed:", detail)
     end
     return res, detail
 end

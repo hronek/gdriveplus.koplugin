@@ -1,4 +1,4 @@
---- Google Drive Sync for KOReader.
+--- Google Drive Plus for KOReader.
 --- Fork of moohaad/gdrive.koplugin (MIT). See README.md and SYNC_FORMAT.md.
 
 local ConfirmBox = require("ui/widget/confirmbox")
@@ -20,19 +20,19 @@ local progress = require("progress")
 local sync = require("sync")
 local utils = require("utils")
 
-local SETTINGS_KEY = "gdrivesync"
+local SETTINGS_KEY = "gdriveplus"
 local LEGACY_SETTINGS_KEY = "gdrive" -- settings of the original gdrive.koplugin
 local SYNC_FOLDER = "KOReader_Sync"
 local VOCAB_NAME = "vocabulary_builder.sqlite3"
 
-local GDriveSync = WidgetContainer:extend{
-    name = "gdrivesync",
+local GDrivePlus = WidgetContainer:extend{
+    name = "gdriveplus",
     is_doc_only = false,
     settings = nil,
     history = nil,
 }
 
-GDriveSync.default_settings = {
+GDrivePlus.default_settings = {
     client_id = "",
     client_secret = "",
     refresh_token = "",
@@ -49,7 +49,7 @@ GDriveSync.default_settings = {
 -- Settings
 -- ---------------------------------------------------------------------------
 
-function GDriveSync:init()
+function GDrivePlus:init()
     self.history = {}
     local settings = G_reader_settings:readSetting(SETTINGS_KEY)
     if type(settings) ~= "table" then
@@ -81,35 +81,35 @@ function GDriveSync:init()
     end
 end
 
-function GDriveSync:save()
+function GDrivePlus:save()
     G_reader_settings:saveSetting(SETTINGS_KEY, self.settings)
     if G_reader_settings.flush then G_reader_settings:flush() end
 end
 
-function GDriveSync:isConfigured()
+function GDrivePlus:isConfigured()
     return self.settings.client_id ~= "" and self.settings.refresh_token ~= ""
 end
 
-function GDriveSync:onDispatcherRegisterActions()
-    Dispatcher:registerAction("gdrivesync_sync", {
-        category = "none", event = "GDriveSyncNow",
+function GDrivePlus:onDispatcherRegisterActions()
+    Dispatcher:registerAction("gdriveplus_sync", {
+        category = "none", event = "GDrivePlusNow",
         title = _("Google Drive: sync this book"), reader = true,
     })
 end
 
-function GDriveSync:onGDriveSyncNow()
+function GDrivePlus:onGDrivePlusNow()
     self:syncNow()
     return true
 end
 
-function GDriveSync:toggle(key)
+function GDrivePlus:toggle(key)
     self.settings[key] = not self.settings[key]
     self:save()
 end
 
-function GDriveSync:addToMainMenu(menu_items)
-    menu_items.gdrivesync = {
-        text = _("Google Drive Sync"),
+function GDrivePlus:addToMainMenu(menu_items)
+    menu_items.gdriveplus = {
+        text = _("Google Drive Plus"),
         sorting_hint = "tools",
         sub_item_table = {
             { text = _("Sync this book now"), callback = function() self:syncNow() end },
@@ -158,13 +158,13 @@ end
 -- UI helpers
 -- ---------------------------------------------------------------------------
 
-function GDriveSync:info(text, timeout)
+function GDrivePlus:info(text, timeout)
     UIManager:show(InfoMessage:new{ text = text, timeout = timeout })
 end
 
-function GDriveSync:recordError(what, err)
+function GDrivePlus:recordError(what, err)
     err = tostring(err or "unknown error")
-    logger.warn("GDriveSync:", what, "-", err)
+    logger.warn("GDrivePlus:", what, "-", err)
     self.settings.last_error = os.date("%Y-%m-%d %H:%M:%S") .. "  " .. what .. "\n" .. err
     if err:find("HTTP 404", 1, true) then
         -- A cached folder id no longer exists on Drive; look it up again next time.
@@ -173,7 +173,7 @@ function GDriveSync:recordError(what, err)
     self:save()
 end
 
-function GDriveSync:showLastError()
+function GDrivePlus:showLastError()
     local text = self.settings.last_error
     if not text or text == "" then text = _("No errors recorded.") end
     self:info(text)
@@ -189,7 +189,7 @@ end
 
 --- Run `fn` with a "working…" message, after making sure we are online.
 --- `fn` returns the text to show afterwards (or nil for nothing) and a timeout.
-function GDriveSync:interactive(title, fn)
+function GDrivePlus:interactive(title, fn)
     local function work()
         local msg = InfoMessage:new{ text = title }
         UIManager:show(msg)
@@ -217,7 +217,7 @@ end
 -- Credentials
 -- ---------------------------------------------------------------------------
 
-function GDriveSync:getPluginDir()
+function GDrivePlus:getPluginDir()
     local source = debug.getinfo(1).source
     if source:sub(1, 1) == "@" then
         local dir = source:sub(2):match("(.*[/\\])") or "./"
@@ -231,12 +231,12 @@ function GDriveSync:getPluginDir()
 end
 
 --- Places where client_id.json / refresh_token.txt are looked for.
-function GDriveSync:credentialPaths(filename)
+function GDrivePlus:credentialPaths(filename)
     local paths = {}
     local base = DataStorage:getFullDataDir() or DataStorage:getDataDir()
     local plugin_dir = self:getPluginDir()
     local ko_dir = plugin_dir:match("^(.*[/\\])plugins[/\\]")
-    for _, folder in ipairs({ "gdrivesync", "gdrive" }) do
+    for _, folder in ipairs({ "gdriveplus", "gdrive" }) do
         table.insert(paths, base .. "/" .. folder .. "/" .. filename)
         if ko_dir then table.insert(paths, ko_dir .. folder .. "/" .. filename) end
     end
@@ -244,7 +244,7 @@ function GDriveSync:credentialPaths(filename)
     return paths
 end
 
-function GDriveSync:findCredentialFile(filename)
+function GDrivePlus:findCredentialFile(filename)
     local paths = self:credentialPaths(filename)
     for _, path in ipairs(paths) do
         if lfs.attributes(path, "mode") == "file" then return path end
@@ -252,7 +252,7 @@ function GDriveSync:findCredentialFile(filename)
     return nil, paths
 end
 
-function GDriveSync:loadClientIDFromJson()
+function GDrivePlus:loadClientIDFromJson()
     local found, searched = self:findCredentialFile("client_id.json")
     if not found then
         self:info(_("client_id.json not found in:") .. "\n" .. table.concat(searched, "\n"))
@@ -272,7 +272,7 @@ function GDriveSync:loadClientIDFromJson()
     end
 end
 
-function GDriveSync:loadRefreshTokenFromFile()
+function GDrivePlus:loadRefreshTokenFromFile()
     local found, searched = self:findCredentialFile("refresh_token.txt")
     if not found then
         self:info(_("refresh_token.txt not found in:") .. "\n" .. table.concat(searched, "\n"))
@@ -288,7 +288,7 @@ function GDriveSync:loadRefreshTokenFromFile()
     end
 end
 
-function GDriveSync:clearAuth()
+function GDrivePlus:clearAuth()
     UIManager:show(ConfirmBox:new{
         text = _("Clear all Google Drive credentials?"),
         ok_callback = function()
@@ -304,7 +304,7 @@ function GDriveSync:clearAuth()
 end
 
 --- @return access token — or nil, error
-function GDriveSync:getToken()
+function GDrivePlus:getToken()
     if not self:isConfigured() then
         return nil, _("Setup required: load client_id.json and refresh_token.txt in Settings.")
     end
@@ -328,7 +328,7 @@ end
 
 --- Resolve (and cache) the ids of KOReader_Sync and its subfolders.
 --- @param which "root" | "annotations" | "progress"
-function GDriveSync:getFolder(token, which)
+function GDrivePlus:getFolder(token, which)
     local folders = self.settings.folders
     if type(folders) ~= "table" then
         folders = {}
@@ -354,7 +354,7 @@ end
 -- Per-book context
 -- ---------------------------------------------------------------------------
 
-function GDriveSync:bookContext()
+function GDrivePlus:bookContext()
     local ui = self.ui
     local doc = ui and ui.document
     local file = doc and doc.file
@@ -394,7 +394,7 @@ function GDriveSync:bookContext()
     }
 end
 
-function GDriveSync:saveBookCache(ctx)
+function GDrivePlus:saveBookCache(ctx)
     local ds = ctx.ui.doc_settings
     if not ds then return end
     ds:saveSetting(SETTINGS_KEY, ctx.cache)
@@ -405,7 +405,7 @@ end
 -- Sync operations (all synchronous; each returns ok, message)
 -- ---------------------------------------------------------------------------
 
-function GDriveSync:doSyncAnnotations(token, ctx, only_if_changed)
+function GDrivePlus:doSyncAnnotations(token, ctx, only_if_changed)
     local folder_id, err = self:getFolder(token, "annotations")
     if not folder_id then return false, err end
     ctx.folder_id = folder_id
@@ -416,7 +416,7 @@ function GDriveSync:doSyncAnnotations(token, ctx, only_if_changed)
     return true, res
 end
 
-function GDriveSync:doPushProgress(token, ctx)
+function GDrivePlus:doPushProgress(token, ctx)
     local folder_id, err = self:getFolder(token, "progress")
     if not folder_id then return false, err end
     ctx.folder_id = folder_id
@@ -425,7 +425,7 @@ function GDriveSync:doPushProgress(token, ctx)
     return ok, perr
 end
 
-function GDriveSync:doPullProgress(token, ctx, force)
+function GDrivePlus:doPullProgress(token, ctx, force)
     local folder_id, err = self:getFolder(token, "progress")
     if not folder_id then return nil, err end
     ctx.folder_id = folder_id
@@ -435,7 +435,7 @@ function GDriveSync:doPullProgress(token, ctx, force)
 end
 
 --- Parse a Drive RFC 3339 timestamp ("2024-01-15T10:30:00.000Z", UTC) to epoch.
-function GDriveSync:parseGDriveTime(time_str)
+function GDrivePlus:parseGDriveTime(time_str)
     if not time_str or time_str == "" then return 0 end
     local year, month, day, hour, min, sec = time_str:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
     if not year then return 0 end
@@ -452,7 +452,7 @@ end
 
 --- Two-way sync of the vocabulary builder database (newest file wins).
 --- @return ok, message
-function GDriveSync:doSyncVocabulary(token)
+function GDrivePlus:doSyncVocabulary(token)
     local local_path = DataStorage:getSettingsDir() .. "/" .. VOCAB_NAME
     local local_mtime = lfs.attributes(local_path, "modification")
     local folder_id, err = self:getFolder(token, "root")
@@ -508,7 +508,7 @@ local function describe(stats)
     return text
 end
 
-function GDriveSync:syncNow()
+function GDrivePlus:syncNow()
     local ctx, cerr = self:bookContext()
     if not ctx then return self:info(cerr, 3) end
     self:interactive(_("Syncing with Google Drive…"), function()
@@ -534,7 +534,7 @@ function GDriveSync:syncNow()
     end)
 end
 
-function GDriveSync:pushProgress()
+function GDrivePlus:pushProgress()
     local ctx, cerr = self:bookContext()
     if not ctx then return self:info(cerr, 3) end
     self:interactive(_("Pushing reading progress…"), function()
@@ -549,7 +549,7 @@ function GDriveSync:pushProgress()
     end)
 end
 
-function GDriveSync:pullProgress()
+function GDrivePlus:pullProgress()
     local ctx, cerr = self:bookContext()
     if not ctx then return self:info(cerr, 3) end
     self:interactive(_("Pulling reading progress…"), function()
@@ -569,7 +569,7 @@ function GDriveSync:pullProgress()
     end)
 end
 
-function GDriveSync:syncVocabulary()
+function GDrivePlus:syncVocabulary()
     self:interactive(_("Syncing vocabulary…"), function()
         local token, err = self:getToken()
         if not token then return err end
@@ -587,7 +587,7 @@ end
 -- ---------------------------------------------------------------------------
 
 --- @param closing true when called from onCloseDocument
-function GDriveSync:autoSync(closing)
+function GDrivePlus:autoSync(closing)
     if not self:isConfigured() or not isConnected() then return end
     local ctx = self:bookContext()
     if not ctx then return end
@@ -639,7 +639,7 @@ function GDriveSync:autoSync(closing)
     if not ok then self:recordError("auto sync", crash) end
 end
 
-function GDriveSync:onReaderReady()
+function GDrivePlus:onReaderReady()
     if not (self.settings.auto_sync or self.settings.sync_progress) then return end
     if not self:isConfigured() then return end
     UIManager:scheduleIn(3, function()
@@ -648,7 +648,7 @@ function GDriveSync:onReaderReady()
     end)
 end
 
-function GDriveSync:onCloseDocument()
+function GDrivePlus:onCloseDocument()
     if not (self.settings.auto_sync or self.settings.sync_progress) then return end
     self:autoSync(true)
 end
@@ -657,7 +657,7 @@ end
 -- Browse and download
 -- ---------------------------------------------------------------------------
 
-function GDriveSync:setDownloadDir()
+function GDrivePlus:setDownloadDir()
     local PathChooser = require("ui/widget/pathchooser")
     UIManager:show(PathChooser:new{
         select_directory = true,
@@ -671,7 +671,7 @@ function GDriveSync:setDownloadDir()
     })
 end
 
-function GDriveSync:browse(folder_id, folder_name)
+function GDrivePlus:browse(folder_id, folder_name)
     self:interactive(_("Loading…"), function()
         local token, err = self:getToken()
         if not token then return err end
@@ -729,7 +729,7 @@ function GDriveSync:browse(folder_id, folder_name)
     end)
 end
 
-function GDriveSync:download(file)
+function GDrivePlus:download(file)
     local clean_name = file.name:gsub("[\\/]", "_")
     local dest_path = self.settings.download_dir .. "/" .. clean_name
     self:interactive(T(_("Downloading %1…"), file.name), function()
@@ -744,4 +744,4 @@ function GDriveSync:download(file)
     end)
 end
 
-return GDriveSync
+return GDrivePlus
