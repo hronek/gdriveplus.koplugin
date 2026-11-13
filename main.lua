@@ -588,16 +588,18 @@ end
 
 --- @param closing true when called from onCloseDocument
 function GDrivePlus:autoSync(closing)
-    if not self:isConfigured() or not isConnected() then return end
+    if not self:isConfigured() then return end
     local ctx = self:bookContext()
     if not ctx then return end
+    if closing then
+        -- Remember when this device last had the book open, even when offline or
+        -- when the push fails, so an older position from elsewhere is never applied.
+        ctx.cache.progress_ts = os.time()
+        self:saveBookCache(ctx)
+    end
+    if not isConnected() then return end
 
     local ok, crash = xpcall(function()
-        if closing then
-            -- remember when this device last had the book open, even if the push fails
-            ctx.cache.progress_ts = os.time()
-            self:saveBookCache(ctx)
-        end
         local token, err = self:getToken()
         if not token then
             self:recordError("token", err)
@@ -720,9 +722,6 @@ function GDrivePlus:browse(folder_id, folder_name)
         self.current_menu = Menu:new{
             title = folder_name or _("Google Drive"),
             item_table = items,
-            is_borderless = true,
-            is_popout = false,
-            covers_fullscreen = true,
         }
         UIManager:show(self.current_menu)
         return nil
