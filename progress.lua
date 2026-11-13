@@ -1,146 +1,148 @@
---- Reading progress push/pull for GDrive plugin.
---- Separate from annotation sync — uses its own JSON file on GDrive.
---- Follows KOSync patterns: push current position, pull & navigate.
+--- Reading progress push/pull.
+---
+--- Remote layout: KOReader_Sync/progress/<book file name>.json
+---   { version, book={file, partial_md5}, progress, percentage, pages,
+---     timestamp, device, device_id }
+--- `progress` is a page number (PDF…) or an xpointer (EPUB…). Another client
+--- that cannot produce an xpointer may omit it; `percentage` is then used.
 
-local json = require("json")
-local logger = require("logger")
-local UIManager = require("ui/uimanager")
 local Event = require("ui/event")
+local gjson = require("gjson")
+local logger = require("logger")
 
 local M = {}
 
-function M.get_current_progress(ui)
+function M.get_current(ui)
     if not ui or not ui.document then return nil end
     local progress_val, percent_val
-    if ui.document.info.has_pages then
-        if ui.paging then
-            progress_val = ui.paging:getLastProgress()
-            percent_val = ui.paging:getLastPercent()
-        end
-    else
-        if ui.rolling then
-            progress_val = ui.rolling:getLastProgress()
-            percent_val = ui.rolling:getLastPercent()
-        end
+    if ui.paging then
+        progress_val = ui.paging:getLastProgress()
+        percent_val = ui.paging:getLastPercent()
+    elseif ui.rolling then
+        progress_val = ui.rolling:getLastProgress()
+        percent_val = ui.rolling:getLastPercent()
     end
-    if not progress_val then return nil end
-    return {
-        progress = progress_val,
-        percentage = percent_val or 0,
-        timestamp = os.time(),
-    }
+    if progress_val == nil then return nil end
+    local pages
+    local ok, n = pcall(ui.document.getPageCount, ui.document)
+    if ok and type(n) == "number" then pages = n end
+    return { progress = progress_val, percentage = percent_val or 0, pages = pages }
 end
 
---- Navigate to a given progress position (mirrors KOSync:syncToProgress).
-function M.sync_to_progress(ui, prog)
-    if not ui or not ui.document or not prog or not prog.progress then return end
-    logger.dbg("GDrive: syncing progress to", prog.progress, "pct:", prog.percentage)
-    if ui.document.info.has_pages then
-        ui:handleEvent(Event:new("GotoPage", tonumber(prog.progress)))
-    else
-        ui:handleEvent(Event:new("GotoXPointer", prog.progress))
-    end
-end
-
---- Push current reading progress to GDrive.
---- Uploads a small JSON file: {progress, percentage, timestamp}
---- File name: <book_hash>_progress.json in the "progress" subfolder.
-function M.push(widget, network, token, folder_id, book_hash, interactive)
-    local prog = M.get_current_progress(widget.ui)
-    if not prog then
-        if interactive then
-            UIManager:show(require("ui/widget/infomessage"):new{ text = "No progress to push.", timeout = 3 })
+local function go_to(ui, remote)
+    local pct = type(remote.percentage) == "number" and remote.percentage or nil
+    if ui.paging then
+        local page = tonumber(remote.progress)
+        if page then
+            ui:handleEvent(Event:new("GotoPage", page))
+            return true
         end
-        return false
-    end
-
-    -- Find or create progress subfolder
-    local prog_folder = network.findFile(token, "progress", folder_id)
-    local prog_folder_id
-    if prog_folder then
-        prog_folder_id = prog_folder.id
-    else
-        prog_folder_id = network.createFolder(token, "progress", folder_id)
-    end
-    if not prog_folder_id then
-        logger.dbg("GDrive: cannot access progress folder")
-        return false
-    end
-
-    -- Write progress to temp file
-    local DataStorage = require("datastorage")
-    local tmp_path = DataStorage:getDataDir() .. "/gdrive_progress_tmp.json"
-    local f = io.open(tmp_path, "w")
-    if not f then return false end
-    f:write(json.encode(prog))
-    f:close()
-
-    -- Upload or update
-    local remote_name = book_hash .. "_progress.json"
-    local remote_file = network.findFile(token, remote_name, prog_folder_id)
-    local ok
-    if remote_file then
-        ok = network.updateFile(token, remote_file.id, tmp_path)
-    else
-        ok = network.uploadFile(token, tmp_path, remote_name, prog_folder_id)
-    end
-    os.remove(tmp_path)
-
-    logger.dbg("GDrive: push progress", prog.percentage * 100, "% =>", ok)
-    return ok
-end
-
---- Pull reading progress from GDrive and navigate if newer.
-function M.pull(widget, network, token, folder_id, book_hash, interactive)
-    local prog_folder = network.findFile(token, "progress", folder_id)
-    if not prog_folder then
-        if interactive then
-            UIManager:show(require("ui/widget/infomessage"):new{ text = "No progress found.", timeout = 3 })
+    elseif type(remote.progress) == "string" and remote.progress ~= "" then
+        local doc = ui.document
+        local valid = true
+        if type(doc.isXPointerInDocument) == "function" then
+            local ok, res = pcall(doc.isXPointerInDocument, doc, remote.progress)
+            valid = ok and res
         end
-        return false
-    end
-
-    local remote_name = book_hash .. "_progress.json"
-    local remote_file = network.findFile(token, remote_name, prog_folder.id)
-    if not remote_file then
-        if interactive then
-            UIManager:show(require("ui/widget/infomessage"):new{ text = "No progress found for this book.", timeout = 3 })
+        if valid then
+            ui:handleEvent(Event:new("GotoXPointer", remote.progress))
+            return true
         end
-        return false
     end
-
-    -- Download to temp file
-    local DataStorage = require("datastorage")
-    local tmp_path = DataStorage:getDataDir() .. "/gdrive_progress_tmp.json"
-    local dl_ok = network.downloadFileSync(token, remote_file.id, tmp_path)
-    if not dl_ok then
-        os.remove(tmp_path)
-        return false
-    end
-
-    local f = io.open(tmp_path, "r")
-    if not f then return false end
-    local content = f:read("*a")
-    f:close()
-    os.remove(tmp_path)
-
-    local decode_ok, remote_prog = pcall(json.decode, content)
-    if not decode_ok or not remote_prog or not remote_prog.progress then
-        return false
-    end
-
-    -- Compare with local — if position differs, apply remote
-    local local_prog = M.get_current_progress(widget.ui)
-    if local_prog and remote_prog.progress == local_prog.progress then
-        if interactive then
-            UIManager:show(require("ui/widget/infomessage"):new{ text = "Progress already synced.", timeout = 3 })
-        end
+    if pct then
+        ui:handleEvent(Event:new("GotoPercent", pct * 100))
         return true
     end
+    return false
+end
 
-    M.sync_to_progress(widget.ui, remote_prog)
-    logger.dbg("GDrive: pulled progress to", (remote_prog.percentage or 0) * 100, "%")
+local function locate(network, token, ctx)
+    if ctx.cache.prog_id then return { id = ctx.cache.prog_id } end
+    local file, err = network.findFile(token, ctx.remote_name, { parent_id = ctx.folder_id })
+    if err then return nil, err end
+    if file then return file end
+    file, err = network.findByProperty(token, "partial_md5", ctx.book.partial_md5, ctx.folder_id)
+    if err then return nil, err end
+    return file
+end
+
+--- @param ctx {ui, book, remote_name, folder_id, cache, device, device_id}
+--- @return true — or false, error
+function M.push(network, token, ctx)
+    local cur = M.get_current(ctx.ui)
+    if not cur then return false, "no reading position" end
+    local now = os.time()
+    local body = gjson.encode({
+        version = 2,
+        book = { file = ctx.book.file, partial_md5 = ctx.book.partial_md5 },
+        progress = cur.progress,
+        percentage = cur.percentage,
+        pages = cur.pages,
+        timestamp = now,
+        device = ctx.device,
+        device_id = ctx.device_id,
+    })
+
+    local function put(id)
+        return network.upload(token, {
+            id = id,
+            name = ctx.remote_name,
+            parent_id = ctx.folder_id,
+            app_properties = { partial_md5 = ctx.book.partial_md5 },
+            content = body,
+            mime = "application/json",
+        })
+    end
+
+    local id, err
+    if ctx.cache.prog_id then
+        id, err = put(ctx.cache.prog_id)
+        if not id then ctx.cache.prog_id = nil end -- stale id: fall through to a lookup
+    end
+    if not id then
+        local file, lerr = locate(network, token, ctx)
+        if lerr then return false, lerr end
+        id, err = put(file and file.id or nil)
+    end
+    if not id then return false, "upload: " .. tostring(err) end
+    ctx.cache.prog_id = id
+    ctx.cache.progress_ts = now
+    logger.dbg("GDriveSync: pushed progress", cur.percentage)
     return true
+end
+
+--- @param force  jump even when the remote position is older / from this device
+--- @return status ("moved" | "same" | "older" | "none") — or nil, error
+function M.pull(network, token, ctx, force)
+    local file, err = locate(network, token, ctx)
+    if err then return nil, err end
+    if not file then return "none" end
+
+    local content, derr, code = network.download(token, file.id)
+    if not content and code == 404 and ctx.cache.prog_id then
+        ctx.cache.prog_id = nil
+        return M.pull(network, token, ctx, force)
+    end
+    if not content then return nil, "download: " .. tostring(derr) end
+    ctx.cache.prog_id = file.id
+
+    local remote = gjson.decode(content)
+    if type(remote) ~= "table" then return nil, "remote progress is not valid JSON" end
+
+    local cur = M.get_current(ctx.ui)
+    if cur and remote.progress ~= nil and remote.progress == cur.progress then return "same" end
+
+    if not force then
+        if remote.device_id ~= nil and remote.device_id == ctx.device_id then return "same" end
+        local remote_ts = tonumber(remote.timestamp) or 0
+        if remote_ts <= (tonumber(ctx.cache.progress_ts) or 0) then return "older" end
+    end
+
+    if go_to(ctx.ui, remote) then
+        ctx.cache.progress_ts = os.time()
+        return "moved", remote
+    end
+    return nil, "remote position cannot be used"
 end
 
 return M

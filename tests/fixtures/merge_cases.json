@@ -1,0 +1,75 @@
+{
+  "comment": "Shared by the plugin (Lua) and the web reader (JS). Each case: local = live entries on this client, base = map after the last sync, remote = map on Drive. expect.live / expect.deleted list the keys of the merged result; expect.fields checks single values.",
+  "entries": {
+    "pdfA": {"page": 3, "pos0": {"x": 100.4, "y": 200.2, "page": 3, "zoom": 1.5, "rotation": 0}, "pos1": {"x": 300.6, "y": 212.9, "page": 3, "zoom": 1.5, "rotation": 0}, "pboxes": [{"x": 100, "y": 198, "w": 201, "h": 16}], "text": "first highlight", "drawer": "lighten", "color": "yellow", "datetime": "2026-11-01 10:00:00"},
+    "pdfB_samex_otherpage": {"page": 7, "pos0": {"x": 100.4, "y": 200.2, "page": 7, "zoom": 1.5, "rotation": 0}, "pos1": {"x": 300.6, "y": 212.9, "page": 7, "zoom": 1.5, "rotation": 0}, "pboxes": [{"x": 100, "y": 198, "w": 201, "h": 16}], "text": "same x, other page", "drawer": "lighten", "datetime": "2026-11-01 10:05:00"},
+    "pdfC": {"page": 3, "pos0": {"x": 80, "y": 400, "page": 3, "zoom": 1, "rotation": 0}, "pos1": {"x": 250, "y": 430, "page": 3, "zoom": 1, "rotation": 0}, "pboxes": [{"x": 80, "y": 398, "w": 400, "h": 16}, {"x": 60, "y": 414, "w": 190, "h": 16}], "text": "two line highlight", "drawer": "underscore", "datetime": "2026-11-02 09:00:00"},
+    "pdfBookmark": {"page": 12, "text": "in Chapter 2", "datetime": "2026-11-03 08:00:00"},
+    "epubA": {"page": "/body/DocFragment[3]/body/p[5]/text().12", "pos0": "/body/DocFragment[3]/body/p[5]/text().12", "pos1": "/body/DocFragment[3]/body/p[5]/text().40", "text": "epub highlight", "drawer": "lighten", "datetime": "2026-11-01 11:00:00"}
+  },
+  "keys": {
+    "pdfA": "p3|100,200|301,213",
+    "pdfB_samex_otherpage": "p7|100,200|301,213",
+    "pdfC": "p3|80,400|250,430",
+    "pdfBookmark": "BOOKMARK|12",
+    "epubA": "/body/DocFragment[3]/body/p[5]/text().12|/body/DocFragment[3]/body/p[5]/text().40"
+  },
+  "cases": [
+    {
+      "name": "first sync, nothing remote: everything is uploaded, same-x highlights on different pages both survive",
+      "local": ["pdfA", "pdfB_samex_otherpage", "pdfC", "pdfBookmark"],
+      "base": [], "remote": [],
+      "expect": {"live": ["pdfA", "pdfB_samex_otherpage", "pdfC", "pdfBookmark"], "deleted": []}
+    },
+    {
+      "name": "remote has an entry this client never saw: it is added",
+      "local": ["pdfA"], "base": ["pdfA"], "remote": ["pdfA", "pdfC"],
+      "expect": {"live": ["pdfA", "pdfC"], "deleted": []}
+    },
+    {
+      "name": "deleted here since last sync: becomes a tombstone",
+      "local": ["pdfA"], "base": ["pdfA", "pdfC"], "remote": ["pdfA", "pdfC"],
+      "expect": {"live": ["pdfA"], "deleted": ["pdfC"]}
+    },
+    {
+      "name": "deleted remotely (tombstone on Drive), untouched here: removed here",
+      "local": ["pdfA", "pdfC"], "base": ["pdfA", "pdfC"], "remote": ["pdfA", {"use": "pdfC", "set": {"deleted": true, "datetime_updated": "2026-11-05 12:00:00"}}],
+      "expect": {"live": ["pdfA"], "deleted": ["pdfC"]}
+    },
+    {
+      "name": "note edited remotely, untouched here: remote wins even though its clock is behind",
+      "local": ["pdfA"], "base": ["pdfA"], "remote": [{"use": "pdfA", "set": {"note": "from the web", "datetime_updated": "2020-01-01 00:00:00"}}],
+      "expect": {"live": ["pdfA"], "deleted": [], "fields": {"pdfA": {"note": "from the web"}}}
+    },
+    {
+      "name": "note edited here, remote untouched: local wins",
+      "local": [{"use": "pdfA", "set": {"note": "from the device", "datetime_updated": "2026-11-06 10:00:00"}}], "base": ["pdfA"], "remote": ["pdfA"],
+      "expect": {"live": ["pdfA"], "deleted": [], "fields": {"pdfA": {"note": "from the device"}}}
+    },
+    {
+      "name": "edited on both sides: the newer edit wins",
+      "local": [{"use": "pdfA", "set": {"note": "older edit", "datetime_updated": "2026-11-06 10:00:00"}}], "base": ["pdfA"], "remote": [{"use": "pdfA", "set": {"note": "newer edit", "datetime_updated": "2026-11-06 11:00:00"}}],
+      "expect": {"live": ["pdfA"], "deleted": [], "fields": {"pdfA": {"note": "newer edit"}}}
+    },
+    {
+      "name": "deleted here but edited remotely later: the later edit resurrects it",
+      "local": [], "base": ["pdfA"], "remote": [{"use": "pdfA", "set": {"note": "kept", "datetime_updated": "2099-01-01 00:00:00"}}],
+      "expect": {"live": ["pdfA"], "deleted": [], "fields": {"pdfA": {"note": "kept"}}}
+    },
+    {
+      "name": "re-created here after a remote tombstone: live again",
+      "local": [{"use": "pdfA", "set": {"datetime": "2026-11-08 10:00:00"}}], "base": [], "remote": [{"use": "pdfA", "set": {"deleted": true, "datetime_updated": "2026-11-07 10:00:00"}}],
+      "expect": {"live": ["pdfA"], "deleted": []}
+    },
+    {
+      "name": "tombstones are kept once both sides agree",
+      "local": ["pdfA"], "base": ["pdfA", {"use": "pdfC", "set": {"deleted": true, "datetime_updated": "2026-11-05 12:00:00"}}], "remote": ["pdfA", {"use": "pdfC", "set": {"deleted": true, "datetime_updated": "2026-11-05 12:00:00"}}],
+      "expect": {"live": ["pdfA"], "deleted": ["pdfC"]}
+    },
+    {
+      "name": "epub entries and bookmarks merge by key too",
+      "local": ["epubA"], "base": [], "remote": ["pdfBookmark"],
+      "expect": {"live": ["epubA", "pdfBookmark"], "deleted": []}
+    }
+  ]
+}

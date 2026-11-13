@@ -1,97 +1,118 @@
-# Google Drive Plugin for KOReader
+# Google Drive Sync for KOReader
 
-Two-way sync for highlights, bookmarks, reading progress, and vocabulary across devices via Google Drive.
+Two-way sync of highlights, notes, bookmarks, reading progress and vocabulary
+between KOReader devices through your own Google Drive — and with the
+[web reader](https://github.com/hronek/webKOReaderGdrive), which opens the same
+books and annotations in a browser.
 
-## Features
+This is a fork of [moohaad/gdrive.koplugin](https://github.com/moohaad/gdrive.koplugin).
 
-- **3-way merge sync** — annotations are merged intelligently, not overwritten. Edits on multiple devices are combined without data loss (same approach as [AnnotationSync](https://github.com/nicholasgasior/koreader-plugin-annotation-sync))
-- **Vocabulary sync** — syncs `vocabulary_builder.sqlite3` (timestamp-based, newer wins)
-- **Auto-sync** — automatically syncs on book open and close (configurable)
-- **Browse & download** — browse your Google Drive and download files to your device
-- **Per-book sync** — each book's annotations are identified by content hash, so renaming or moving files doesn't break sync
+## What is different from the original
 
-## Installation
+- **Sync files are named after the book** (`Moje kniha.pdf.json`) instead of a
+  hash. The hash is stored inside the file.
+- **PDF sync works.** The merge no longer calls into the PDF engine, highlights
+  on different pages can no longer overwrite each other, and multi-page
+  highlights survive a sync.
+- **Errors are shown and logged.** A failed sync says why; the last error is
+  kept under *Settings → Show last error* and in `crash.log`.
+- **Nothing is overwritten blindly.** If the file on Drive cannot be downloaded
+  or read, the sync stops instead of replacing it.
+- **Faster open/close.** Folder and file ids are cached, and closing a book
+  with no new annotations makes no annotation request at all.
+- Reading progress only jumps to a *newer* position from *another* device.
+- Timeouts on every request, proper URL encoding, folders with more than 100
+  files, downloads streamed to disk.
+- The file format is documented in [SYNC_FORMAT.md](SYNC_FORMAT.md) and covered
+  by tests.
 
-Copy the `gdrive.koplugin` folder into your KOReader plugins directory:
+Existing data is picked up: credentials are taken over from the original
+plugin's settings, and annotation files it uploaded are imported on the first
+sync of each book. Both plugins can be installed side by side, but only one
+should have automatic sync enabled.
+
+## Install
+
+**From Storefront or App Store** (inside KOReader): search for
+`gdrivesync.koplugin`.
+
+**Manually**: download `gdrivesync.koplugin.zip` from
+[Releases](../../releases), unzip it, and copy the `gdrivesync.koplugin` folder
+into KOReader's `plugins` folder:
+
+| Device | Folder |
+|---|---|
+| Kindle | `/mnt/us/koreader/plugins/` |
+| Kobo | `/mnt/onboard/.adds/koreader/plugins/` |
+| Android | `koreader/plugins/` on internal storage |
+
+Restart KOReader. The plugin is under **Tools → Google Drive Sync**.
+
+## Set up Google access
+
+You need two files: `client_id.json` and `refresh_token.txt`. If you already
+set up the original plugin, skip this — its credentials are reused.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/) create a
+   project and enable the **Google Drive API**.
+2. Under *APIs & Services → OAuth consent screen* create an *External* app and
+   add yourself as a test user. Then press **Publish app**: while the app is in
+   *Testing* status Google expires refresh tokens after 7 days. A published,
+   unverified app shows a warning screen once when you sign in; that is fine
+   for personal use.
+3. Under *Credentials* create an **OAuth client ID** of type **Web
+   application** with the redirect URI
+   `https://developers.google.com/oauthplayground`. Download the JSON and name
+   it `client_id.json`.
+4. Open the [OAuth Playground](https://developers.google.com/oauthplayground),
+   click the gear icon, tick *Use your own OAuth credentials* and paste the
+   client ID and secret.
+5. Select the scope `https://www.googleapis.com/auth/drive`, authorise, press
+   *Exchange authorization code for tokens*, and save the **refresh token**
+   into `refresh_token.txt`.
+6. Copy both files into a `gdrivesync` folder inside KOReader's folder
+   (for example `/mnt/onboard/.adds/koreader/gdrivesync/`).
+7. In KOReader: *Google Drive Sync → Settings → Load client ID* and
+   *Load refresh token*.
+
+The two files give full access to your Google Drive. Keep them private.
+
+## Use
+
+| Menu item | What it does |
+|---|---|
+| Sync this book now | Merges annotations with Drive and pushes the reading position |
+| Push / Pull reading progress | Explicit one-way sync of the position |
+| Sync vocabulary | Newest copy of the vocabulary builder database wins |
+| Browse Google Drive | Download books to the device |
+
+With the default settings everything happens automatically when a book is
+opened (after 3 seconds) and closed, if Wi-Fi is on. *Sync this book now* is
+also available as a gesture action.
+
+## Troubleshooting
+
+- **"Cannot get access token … invalid_grant"** — the refresh token expired or
+  was revoked. Create a new one (step 4–5); see step 2 about *Testing* status.
+- **Any other failure** — *Settings → Show last error* shows the reason. The
+  full details, including a stack trace for internal errors, are in KOReader's
+  `crash.log` on lines starting with `GDriveSync:`.
+- **A folder was deleted on Drive** — *Settings → Forget cached Drive folders*.
+
+## Development
+
+The merge logic, JSON encoder and Drive workflow have no KOReader dependencies
+and are tested on a PC:
 
 ```
-<koreader>/plugins/gdrive.koplugin/
+luajit tests/test_core.lua
+luajit tests/test_sync.lua
 ```
 
-On Kindle, this is typically `/mnt/us/koreader/plugins/`. On Kobo, `/mnt/onboard/.adds/koreader/plugins/`.
+To release: bump `version` in `_meta.lua`, commit, and push a matching tag
+(`v2.0.1`). The workflow runs the tests and attaches `gdrivesync.koplugin.zip`
+to a GitHub Release, which is what Storefront and App Store install.
 
-## Setup
+## Licence
 
-### 1. Create a Google Cloud OAuth2 Client
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or use an existing one)
-3. Enable the **Google Drive API**
-4. Go to **Credentials** → **Create Credentials** → **OAuth client ID**
-5. Application type: **Web application**
-6. Add `https://developers.google.com/oauthplayground` as an authorized redirect URI
-7. Download the JSON credentials file
-
-### 2. Get a Refresh Token
-
-1. Go to [OAuth 2.0 Playground](https://developers.google.com/oauthplayground/)
-2. Click the gear icon (⚙️) → check **Use your own OAuth credentials**
-3. Enter your Client ID and Client Secret
-4. In Step 1, select **Drive API v3** → `https://www.googleapis.com/auth/drive`
-5. Authorize and exchange the authorization code for tokens
-6. Copy the **refresh token**
-
-### 3. Configure the Plugin
-
-Place the credential files in KOReader's data directory under `gdrive/`:
-
-```
-<koreader-data>/gdrive/client_id.json
-<koreader-data>/gdrive/refresh_token.txt
-```
-
-The data directory is typically the same as the KOReader directory (e.g., `/mnt/us/koreader/` on Kindle).
-
-Alternatively, place them in the plugin directory (`gdrive.koplugin/`). The plugin checks the data directory first, then falls back to the plugin directory.
-
-- `client_id.json` — the downloaded OAuth credentials JSON from Google Cloud Console
-- `refresh_token.txt` — a plain text file containing only the refresh token
-
-Then in KOReader: **Tools → Google Drive → Settings → Load Client ID (JSON)** and **Load Refresh Token (TXT)**.
-
-## Usage
-
-- **Tools → Google Drive → Sync** — manually sync the current book's annotations
-- **Tools → Google Drive → Sync Vocabulary** — manually sync the vocabulary database
-- **Tools → Google Drive → Browse** — browse and download files from Google Drive
-- **Settings → Auto-sync on open/close** — toggle automatic sync when opening/closing a book
-- **Settings → Auto-sync vocabulary** — toggle automatic vocabulary sync
-- **Settings → Set Download Dir** — choose where downloaded files are saved
-
-## How Sync Works
-
-The plugin uses a 3-way merge protocol:
-
-1. **Local** — current annotations in memory
-2. **Cached** — snapshot from the last successful sync (`.sync` file)
-3. **Remote** — annotations downloaded from Google Drive
-
-On each sync, annotations from all three sources are compared. New annotations from either side are added, and conflicts (same position edited on both sides) are resolved by keeping the most recent edit. Deleted annotations (present in cache but missing from one side) are properly removed.
-
-All sync data is stored in a `KOReader_Sync/annotations/` folder on Google Drive, with each book identified by a partial MD5 hash of its content.
-
-## Files
-
-```
-gdrive.koplugin/
-├── _meta.lua          # Plugin metadata
-├── main.lua           # Main plugin logic and UI
-├── annotations.lua    # Annotation merge helpers
-├── gdrive_sync.lua    # 3-way sync protocol (download/merge/upload)
-├── network.lua        # Google Drive API wrapper
-└── utils.lua          # JSON utility
-```
-
-## License
-
-MIT
+MIT. Original work © 2025 moohaad; changes © 2026 Jiri Hronek.

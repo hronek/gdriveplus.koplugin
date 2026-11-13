@@ -14,14 +14,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check that the tag matches _meta.lua
+        run: |
+          meta=$(sed -n 's/.*version = "\(.*\)".*/\1/p' _meta.lua)
+          if [ "v$meta" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::_meta.lua has version $meta but the tag is $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq luajit
+          luajit tests/test_core.lua
+          luajit tests/test_sync.lua
+
       - name: Package plugin
         run: |
-          mkdir -p gdrive.koplugin
-          cp _meta.lua main.lua annotations.lua gdrive_sync.lua network.lua progress.lua utils.lua gdrive.koplugin/
-          zip -r gdrive.koplugin.zip gdrive.koplugin/
+          mkdir -p gdrivesync.koplugin
+          cp _meta.lua main.lua annotations.lua gjson.lua network.lua progress.lua sync.lua utils.lua LICENSE README.md SYNC_FORMAT.md gdrivesync.koplugin/
+          zip -r gdrivesync.koplugin.zip gdrivesync.koplugin/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: gdrive.koplugin.zip
+          files: gdrivesync.koplugin.zip
           generate_release_notes: true

@@ -1,188 +1,236 @@
-local json = require("json")
+--- Google Drive v3 REST client.
+---
+--- Uses KOReader's standard network stack (socket.http + socketutil timeouts),
+--- the same one KOReader's own cloud storage and KOSync use. Every function
+--- returns nil/false plus an error string on failure; nothing raises.
+
+local gjson = require("gjson")
 local ltn12 = require("ltn12")
+local utils = require("utils")
 
 local M = {}
 
 local TOKEN_URL = "https://oauth2.googleapis.com/token"
+local API = "https://www.googleapis.com/drive/v3/files"
+local UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
+M.FOLDER_MIME = "application/vnd.google-apps.folder"
 
+local function api_error(body, code, status)
+    local msg
+    local data = body and gjson.decode(body)
+    if type(data) == "table" then
+        if type(data.error) == "table" then
+            msg = data.error.message
+        elseif type(data.error) == "string" then
+            msg = data.error_description or data.error
+        end
+    end
+    return string.format("HTTP %s%s", tostring(code or status or "?"), msg and (": " .. msg) or "")
+end
+
+--- @param params {url, method, headers, body, sink}
+--- @return body (or true when a sink was given), code — or nil, error
 function M.request(params)
-    local ok, https = pcall(require, "ssl.https")
-    if not ok then return nil, 0, "SSL module missing" end
-    
-    local response_body = {}
-    local request_params = {
+    local http = require("socket.http")
+    local socket = require("socket")
+    local ok_su, socketutil = pcall(require, "socketutil")
+
+    local chunks = {}
+    local req = {
         url = params.url,
         method = params.method or "GET",
         headers = params.headers or {},
-        sink = ltn12.sink.table(response_body),
-        protocol = "tlsv1_2",
-        verify = "none",
+        sink = params.sink or ltn12.sink.table(chunks),
     }
-    
-    request_params.headers["User-Agent"] = "KOReader/GDrive"
-    request_params.headers["Accept"] = "application/json"
-
+    req.headers["User-Agent"] = "KOReader/GDriveSync"
+    if not req.headers["Accept"] then req.headers["Accept"] = "application/json" end
     if params.body then
-        request_params.source = ltn12.source.string(params.body)
-        request_params.headers["Content-Length"] = #params.body
+        req.source = ltn12.source.string(params.body)
+        req.headers["Content-Length"] = tostring(#params.body)
+    elseif req.method ~= "GET" then
+        req.headers["Content-Length"] = "0"
     end
-    
-    local ok_req, res, code, headers, status = pcall(https.request, request_params)
-    if not ok_req then return nil, 0, tostring(res) end
-    
-    return table.concat(response_body), code, status
+
+    if ok_su then
+        socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
+    end
+    local ok, code, headers, status = pcall(function()
+        return socket.skip(1, http.request(req))
+    end)
+    if ok_su then socketutil:reset_timeout() end
+
+    if not ok then return nil, "request failed: " .. tostring(code) end
+    if type(code) ~= "number" then
+        -- luasocket returns nil, "error message" on connection problems
+        return nil, "connection error: " .. tostring(code or status)
+    end
+    local body = params.sink and "" or table.concat(chunks)
+    if code < 200 or code >= 300 then
+        return nil, api_error(body, code, status), code
+    end
+    return params.sink and true or body, code
+end
+
+local function auth(token, extra)
+    local h = { ["Authorization"] = "Bearer " .. token }
+    if extra then for k, v in pairs(extra) do h[k] = v end end
+    return h
+end
+
+local function json_request(params)
+    local body, err, code = M.request(params)
+    if not body then return nil, err, code end
+    local data, derr = gjson.decode(body)
+    if type(data) ~= "table" then return nil, "bad JSON response: " .. tostring(derr) end
+    return data
 end
 
 function M.refreshToken(client_id, client_secret, refresh_token)
     local body = string.format(
-        "client_id=%s&client_secret=%s&refresh_token=%s&grant_type=refresh_token", 
-        client_id, client_secret, refresh_token
-    )
-    local res_body, code, status = M.request({
+        "client_id=%s&client_secret=%s&refresh_token=%s&grant_type=refresh_token",
+        utils.urlencode(client_id), utils.urlencode(client_secret), utils.urlencode(refresh_token))
+    local data, err = json_request({
         url = TOKEN_URL,
         method = "POST",
         headers = { ["Content-Type"] = "application/x-www-form-urlencoded" },
-        body = body
-    })
-    
-    if not res_body or res_body == "" then return nil, "Conn Error: " .. tostring(status) end
-    local ok, data = pcall(json.decode, res_body)
-    if ok and data and data.access_token then return data end
-    return nil, "Refresh Failed"
-end
-
-function M.findFile(access_token, name, parent_id)
-    local q = string.format("name = '%s' and trashed = false", name)
-    if parent_id then
-        q = q .. string.format(" and '%s' in parents", parent_id)
-    end
-    local q_enc = q:gsub(" ", "%%20"):gsub("'", "%%27"):gsub("=", "%%3D")
-    local url = "https://www.googleapis.com/drive/v3/files?fields=files(id,name,mimeType,modifiedTime)&q=" .. q_enc
-    
-    local res_body, code = M.request({
-        url = url,
-        headers = { ["Authorization"] = "Bearer " .. access_token }
-    })
-    
-    local ok, data = pcall(json.decode, res_body or "")
-    if ok and data and data.files and #data.files > 0 then
-        return data.files[1]
-    end
-    return nil
-end
-
-function M.listFiles(access_token, folder_id)
-    local q = folder_id and ("'" .. folder_id .. "' in parents and trashed = false") or "'root' in parents and trashed = false"
-    local q_enc = q:gsub(" ", "%%20"):gsub("'", "%%27"):gsub("=", "%%3D")
-    local url = "https://www.googleapis.com/drive/v3/files?pageSize=100&fields=files(id,name,mimeType,size)&q=" .. q_enc
-    
-    local res_body, code = M.request({
-        url = url,
-        headers = { ["Authorization"] = "Bearer " .. access_token }
-    })
-    
-    if not res_body then return nil, "Network Error" end
-    local ok, data = pcall(json.decode, res_body)
-    if ok and data and data.files then return data end
-    return nil, "Parse Error"
-end
-
-function M.uploadFile(access_token, local_path, name, parent_id)
-    local f = io.open(local_path, "rb")
-    if not f then return false end
-    local file_content = f:read("*a")
-    f:close()
-    if not file_content then return false end
-
-    local metadata = {
-        name = name,
-        parents = parent_id and {parent_id} or nil
-    }
-    local meta_json = json.encode(metadata)
-    local boundary = "gdrive_boundary_" .. tostring(os.time())
-    local body = "--" .. boundary .. "\r\n"
-        .. "Content-Type: application/json; charset=UTF-8\r\n\r\n"
-        .. meta_json .. "\r\n"
-        .. "--" .. boundary .. "\r\n"
-        .. "Content-Type: application/octet-stream\r\n\r\n"
-        .. file_content .. "\r\n"
-        .. "--" .. boundary .. "--"
-
-    local url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
-    local res_body, code = M.request({
-        url = url,
-        method = "POST",
-        headers = {
-            ["Authorization"] = "Bearer " .. access_token,
-            ["Content-Type"] = "multipart/related; boundary=" .. boundary,
-        },
         body = body,
     })
-
-    local ok, data = pcall(json.decode, res_body or "")
-    return ok and data and data.id ~= nil
+    if not data then return nil, err end
+    if not data.access_token then return nil, "no access_token in response" end
+    return data
 end
 
-function M.updateFile(access_token, file_id, local_path)
-    local f = io.open(local_path, "rb")
-    if not f then return false end
-    local file_content = f:read("*a")
-    f:close()
-    if not file_content then return false end
-
-    local url = string.format("https://www.googleapis.com/upload/drive/v3/files/%s?uploadType=media", file_id)
-    local res_body, code = M.request({
-        url = url,
-        method = "PATCH",
-        headers = {
-            ["Authorization"] = "Bearer " .. access_token,
-            ["Content-Type"] = "application/octet-stream",
-        },
-        body = file_content,
-    })
-
-    local ok, data = pcall(json.decode, res_body or "")
-    return ok and data and data.id ~= nil
+--- Run a files.list query, following nextPageToken.
+--- @return array of files, or nil + error
+function M.query(token, q, fields, order_by, max_items)
+    local files = {}
+    local page_token
+    repeat
+        local url = API .. "?pageSize=200&spaces=drive"
+            .. "&fields=" .. utils.urlencode("nextPageToken,files(" .. (fields or "id,name,mimeType,modifiedTime,size") .. ")")
+            .. "&q=" .. utils.urlencode(q)
+        if order_by then url = url .. "&orderBy=" .. utils.urlencode(order_by) end
+        if page_token then url = url .. "&pageToken=" .. utils.urlencode(page_token) end
+        local data, err = json_request({ url = url, headers = auth(token) })
+        if not data then return nil, err end
+        for _, f in ipairs(data.files or {}) do files[#files + 1] = f end
+        page_token = data.nextPageToken
+    until not page_token or (max_items and #files >= max_items)
+    return files
 end
 
-function M.createFolder(access_token, name, parent_id)
-    local url = "https://www.googleapis.com/drive/v3/files"
-    local metadata = {
-        name = name,
-        mimeType = "application/vnd.google-apps.folder",
-        parents = parent_id and {parent_id} or nil
-    }
-    
-    local res_body, code = M.request({
-        url = url,
+--- Find one file by exact name.
+--- @param opts {parent_id=, folder=true|nil}
+--- @return file table, or nil (not found), or nil + error
+function M.findFile(token, name, opts)
+    opts = opts or {}
+    local q = string.format("name = '%s' and trashed = false", utils.q_escape(name))
+    if opts.parent_id then q = q .. string.format(" and '%s' in parents", utils.q_escape(opts.parent_id)) end
+    if opts.folder then q = q .. string.format(" and mimeType = '%s'", M.FOLDER_MIME) end
+    local files, err = M.query(token, q, nil, "modifiedTime desc", 1)
+    if not files then return nil, err end
+    return files[1]
+end
+
+--- Find one file by an appProperties value (visible to this OAuth client only).
+function M.findByProperty(token, key, value, parent_id)
+    local q = string.format("appProperties has { key='%s' and value='%s' } and trashed = false",
+        utils.q_escape(key), utils.q_escape(value))
+    if parent_id then q = q .. string.format(" and '%s' in parents", utils.q_escape(parent_id)) end
+    local files, err = M.query(token, q, nil, "modifiedTime desc", 1)
+    if not files then return nil, err end
+    return files[1]
+end
+
+function M.listFiles(token, folder_id)
+    local q = string.format("'%s' in parents and trashed = false", utils.q_escape(folder_id or "root"))
+    return M.query(token, q, "id,name,mimeType,size", "folder,name")
+end
+
+function M.createFolder(token, name, parent_id)
+    local data, err = json_request({
+        url = API .. "?fields=id",
         method = "POST",
-        headers = { 
-            ["Authorization"] = "Bearer " .. access_token,
-            ["Content-Type"] = "application/json"
-        },
-        body = json.encode(metadata)
+        headers = auth(token, { ["Content-Type"] = "application/json; charset=UTF-8" }),
+        body = gjson.encode({
+            name = name,
+            mimeType = M.FOLDER_MIME,
+            parents = parent_id and { parent_id } or nil,
+        }),
     })
-    
-    local ok, data = pcall(json.decode, res_body or "")
-    if ok and data and data.id then return data.id end
-    return nil
+    if not data then return nil, err end
+    return data.id
 end
 
-function M.downloadFileSync(access_token, file_id, dest_path)
-    local url = string.format("https://www.googleapis.com/drive/v3/files/%s?alt=media", file_id)
-    local res_body, code = M.request({
-        url = url,
-        headers = { ["Authorization"] = "Bearer " .. access_token }
+--- Find a folder by name under a parent, creating it when missing.
+function M.ensureFolder(token, name, parent_id)
+    local folder, err = M.findFile(token, name, { parent_id = parent_id, folder = true })
+    if folder then return folder.id end
+    if err then return nil, err end
+    return M.createFolder(token, name, parent_id)
+end
+
+--- Download a file's content into memory.
+function M.download(token, file_id)
+    return M.request({
+        url = string.format("%s/%s?alt=media", API, utils.urlencode(file_id)),
+        headers = auth(token, { ["Accept"] = "*/*" }),
     })
-    if code == 200 and res_body then
-        local f = io.open(dest_path, "wb")
-        if f then
-            f:write(res_body)
-            f:close()
-            return true
-        end
+end
+
+--- Download straight to disk (books can be far larger than available RAM).
+function M.downloadToFile(token, file_id, dest_path)
+    local tmp = dest_path .. ".part"
+    local f = io.open(tmp, "wb")
+    if not f then return false, "cannot write " .. dest_path end
+    local ok, err = M.request({
+        url = string.format("%s/%s?alt=media", API, utils.urlencode(file_id)),
+        headers = auth(token, { ["Accept"] = "*/*" }),
+        sink = ltn12.sink.file(f),
+    })
+    if not ok then
+        os.remove(tmp)
+        return false, err
     end
-    return false
+    os.remove(dest_path)
+    if not os.rename(tmp, dest_path) then
+        os.remove(tmp)
+        return false, "cannot rename download"
+    end
+    return true
+end
+
+--- Create or replace a file (metadata and content in one multipart request).
+--- @param args {id=, name=, parent_id=, app_properties=, content=, mime=}
+--- @return file id, or nil + error
+function M.upload(token, args)
+    local metadata = { name = args.name, appProperties = args.app_properties }
+    local url, method
+    if args.id then
+        url = string.format("%s/%s?uploadType=multipart&fields=id", UPLOAD, utils.urlencode(args.id))
+        method = "PATCH"
+    else
+        url = UPLOAD .. "?uploadType=multipart&fields=id"
+        method = "POST"
+        metadata.parents = args.parent_id and { args.parent_id } or nil
+    end
+    local boundary = "gdrivesync_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
+    local body = "--" .. boundary .. "\r\n"
+        .. "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        .. gjson.encode(metadata) .. "\r\n"
+        .. "--" .. boundary .. "\r\n"
+        .. "Content-Type: " .. (args.mime or "application/octet-stream") .. "\r\n\r\n"
+        .. args.content .. "\r\n"
+        .. "--" .. boundary .. "--"
+    local data, err = json_request({
+        url = url,
+        method = method,
+        headers = auth(token, { ["Content-Type"] = "multipart/related; boundary=" .. boundary }),
+        body = body,
+    })
+    if not data then return nil, err end
+    if not data.id then return nil, "upload returned no id" end
+    return data.id
 end
 
 return M
