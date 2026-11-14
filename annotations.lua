@@ -112,18 +112,15 @@ function M.to_map(entries)
     return map
 end
 
+--- A deleted annotation: the whole entry, marked deleted and stamped. Keeping
+--- everything (colour, note, boxes) lets another client restore it as it was.
 local function tombstone(entry, now)
-    return {
-        deleted = true,
-        datetime = entry.datetime,
-        datetime_updated = now,
-        page = entry.page,
-        pos0 = entry.pos0,
-        pos1 = entry.pos1,
-        text = entry.text,
-        chapter = entry.chapter,
-    }
+    local t = sanitize(entry) or {}
+    t.deleted = true
+    t.datetime_updated = now
+    return t
 end
+M.tombstone = tombstone
 
 --- 3-way merge.
 --- @param local_map   current annotations on this device (keyed, live entries only)

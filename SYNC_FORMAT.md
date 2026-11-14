@@ -91,9 +91,15 @@ shown.
 
 ### Deleting
 
-A deleted annotation stays in the file as a tombstone: `"deleted": true` plus
-`datetime_updated` set to the time of deletion. Tombstones are what makes a
-deletion on one device reach the others; they are never removed.
+A deleted annotation stays in the file as a tombstone: the whole entry as it
+was, plus `"deleted": true` and `datetime_updated` set to the time of
+deletion. Tombstones are what makes a deletion on one device reach the
+others; they are never removed. Because they keep colour, note and boxes, a
+client can offer to restore a deleted annotation; a restore writes the entry
+back without `deleted` and with a `datetime_updated` newer than the deletion.
+
+Tombstones written by early development versions keep only `page`, `pos0`,
+`pos1`, `text`, `chapter` and `datetime`; readers must accept both forms.
 
 ### Merge
 

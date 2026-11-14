@@ -145,6 +145,18 @@ local back = map[fixtures.keys.pdfA]
 check(back and back.ext and back.ext[3] ~= nil and back.ext[4] ~= nil and back.ext["3"] == nil, "ext keys are numbers again")
 check(annotations.normalize(back, true, now), "multi-page highlight validates after a round trip")
 
+-- a deletion keeps the whole entry, so another client can restore it as it was
+local full = entry("pdfA")
+full.note, full.color, full.drawer = "n", "green", "underscore"
+local tomb = annotations.tombstone(full, "2026-11-10 12:00:00")
+check(tomb.deleted == true and tomb.datetime_updated == "2026-11-10 12:00:00", "tombstone is marked and stamped")
+check(tomb.note == "n" and tomb.color == "green" and tomb.drawer == "underscore" and #tomb.pboxes == #full.pboxes, "tombstone keeps colour, note and boxes")
+check(annotations.key(tomb) == annotations.key(full) and full.deleted == nil, "tombstone keeps the key and leaves the entry alone")
+local tomb_ext = annotations.tombstone(back, "2026-11-10 12:00:00")
+check(tomb_ext.ext and tomb_ext.ext[3] ~= nil, "tombstone of a multi-page highlight keeps its parts")
+local after_delete = annotations.merge({}, { [fixtures.keys.pdfA] = full }, { [fixtures.keys.pdfA] = full }, "2026-11-10 12:00:00")
+check(after_delete[fixtures.keys.pdfA].deleted and after_delete[fixtures.keys.pdfA].note == "n", "a deletion found by the merge keeps the note")
+
 -- legacy v1 file: bare map with the old lossy keys is re-keyed
 local legacy = { ["66.9|200.4"] = entry("pdfA"), ["66.9|200.4x"] = entry("pdfB_samex_otherpage"), ["__progress__"] = { progress = 5 } }
 local lmap, lversion = annotations.parse_doc(gjson.decode(gjson.encode(legacy)))
