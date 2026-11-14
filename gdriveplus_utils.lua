@@ -1,6 +1,6 @@
 --- Small file and string helpers (no KOReader dependencies).
 
-local gjson = require("gjson")
+local gjson = require("gdriveplus_gjson")
 
 local M = {}
 

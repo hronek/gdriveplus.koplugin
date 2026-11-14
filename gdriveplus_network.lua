@@ -4,9 +4,9 @@
 --- the same one KOReader's own cloud storage and KOSync use. Every function
 --- returns nil/false plus an error string on failure; nothing raises.
 
-local gjson = require("gjson")
+local gjson = require("gdriveplus_gjson")
 local ltn12 = require("ltn12")
-local utils = require("utils")
+local utils = require("gdriveplus_utils")
 
 local M = {}
 

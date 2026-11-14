@@ -4,7 +4,7 @@
 --- rules can be unit-tested on a PC and are mirrored by the web reader.
 --- See SYNC_FORMAT.md for the file format.
 
-local gjson = require("gjson")
+local gjson = require("gdriveplus_gjson")
 
 local M = {}
 

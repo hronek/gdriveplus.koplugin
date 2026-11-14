@@ -3,10 +3,10 @@
 --- Remote layout:  KOReader_Sync/annotations/<book file name>.json
 --- Local snapshot: <book>.sdr/gdriveplus.json  (state after the last successful sync)
 
-local annotations = require("annotations")
-local gjson = require("gjson")
+local annotations = require("gdriveplus_annotations")
+local gjson = require("gdriveplus_gjson")
 local logger = require("logger")
-local utils = require("utils")
+local utils = require("gdriveplus_utils")
 
 local M = {}
 

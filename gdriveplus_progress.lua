@@ -7,7 +7,7 @@
 --- that cannot produce an xpointer may omit it; `percentage` is then used.
 
 local Event = require("ui/event")
-local gjson = require("gjson")
+local gjson = require("gdriveplus_gjson")
 local logger = require("logger")
 
 local M = {}

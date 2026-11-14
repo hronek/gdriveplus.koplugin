@@ -73,7 +73,8 @@ set up the original plugin, skip this — its credentials are reused.
    *Exchange authorization code for tokens*, and save the **refresh token**
    into `refresh_token.txt`.
 6. Copy both files into a `gdriveplus` folder inside KOReader's folder
-   (for example `/mnt/onboard/.adds/koreader/gdriveplus/`).
+   (for example `/mnt/onboard/.adds/koreader/gdriveplus/`). The original
+   plugin's `gdrive` folder is not searched; move the files from there.
 7. In KOReader: *Google Drive Plus → Settings → Load client ID* and
    *Load refresh token*.
 

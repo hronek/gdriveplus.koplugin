@@ -15,10 +15,10 @@ local util = require("util")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
-local network = require("network")
-local progress = require("progress")
-local sync = require("sync")
-local utils = require("utils")
+local network = require("gdriveplus_network")
+local progress = require("gdriveplus_progress")
+local sync = require("gdriveplus_sync")
+local utils = require("gdriveplus_utils")
 
 local SETTINGS_KEY = "gdriveplus"
 local LEGACY_SETTINGS_KEY = "gdrive" -- settings of the original gdrive.koplugin
@@ -147,8 +147,12 @@ function GDrivePlus:addToMainMenu(menu_items)
                         callback = function() self:toggle("upload_statistics") end,
                         separator = true,
                     },
-                    { text = _("Load client ID (client_id.json)"), callback = function() self:loadClientIDFromJson() end },
-                    { text = _("Load refresh token (refresh_token.txt)"), callback = function() self:loadRefreshTokenFromFile() end },
+                    { text = _("Load client ID (client_id.json)"), callback = function()
+                        self:guarded("load client ID", function() self:loadClientIDFromJson() end)
+                    end },
+                    { text = _("Load refresh token (refresh_token.txt)"), callback = function()
+                        self:guarded("load refresh token", function() self:loadRefreshTokenFromFile() end)
+                    end },
                     { text = _("Set download folder"), callback = function() self:setDownloadDir() end },
                     { text = _("Show last error"), callback = function() self:showLastError() end },
                     { text = _("Forget cached Drive folders"), callback = function()
@@ -196,6 +200,31 @@ local function isConnected()
     return res
 end
 
+--- Call `fn`, catching any Lua error so it cannot take KOReader down.
+--- @return ok, then fn's results (text, timeout) or the error with a traceback
+local function runCaught(fn)
+    return xpcall(fn, function(e)
+        return tostring(e) .. "\n" .. debug.traceback()
+    end)
+end
+
+--- Show what a `runCaught` call produced: the error (recorded under `what`, see
+--- Settings → Show last error), or `text` when there is one.
+function GDrivePlus:showOutcome(what, ok, text, timeout)
+    if not ok then
+        self:recordError(what, text)
+        self:info(_("Unexpected error:") .. "\n" .. tostring(text):match("^[^\n]*"))
+    elseif text then
+        self:info(text, timeout)
+    end
+end
+
+--- Run a menu action that needs no network; an error is shown instead of crashing.
+--- `fn` may return the text to show afterwards and a timeout.
+function GDrivePlus:guarded(what, fn)
+    self:showOutcome(what, runCaught(fn))
+end
+
 --- Run `fn` with a "working…" message, after making sure we are online.
 --- `fn` returns the text to show afterwards (or nil for nothing) and a timeout.
 function GDrivePlus:interactive(title, fn)
@@ -203,16 +232,9 @@ function GDrivePlus:interactive(title, fn)
         local msg = InfoMessage:new{ text = title }
         UIManager:show(msg)
         UIManager:forceRePaint()
-        local ok, text, timeout = xpcall(fn, function(e)
-            return tostring(e) .. "\n" .. debug.traceback()
-        end)
+        local ok, text, timeout = runCaught(fn)
         UIManager:close(msg)
-        if not ok then
-            self:recordError(title, text)
-            self:info(_("Unexpected error:") .. "\n" .. tostring(text):match("^[^\n]*"))
-        elseif text then
-            self:info(text, timeout)
-        end
+        self:showOutcome(title, ok, text, timeout)
     end
     local ok, NetworkMgr = pcall(require, "ui/network/manager")
     if ok and type(NetworkMgr.runWhenOnline) == "function" then
@@ -239,17 +261,23 @@ function GDrivePlus:getPluginDir()
     return "./"
 end
 
---- Places where client_id.json / refresh_token.txt are looked for.
+--- Places where client_id.json / refresh_token.txt are looked for: a `gdriveplus`
+--- folder in KOReader's folder, then the plugin's own folder. The original plugin's
+--- `gdrive` folder is deliberately not searched.
 function GDrivePlus:credentialPaths(filename)
-    local paths = {}
+    local paths, seen = {}, {}
+    local function add(path)
+        if not seen[path] then
+            seen[path] = true
+            table.insert(paths, path)
+        end
+    end
     local base = DataStorage:getFullDataDir() or DataStorage:getDataDir()
     local plugin_dir = self:getPluginDir()
     local ko_dir = plugin_dir:match("^(.*[/\\])plugins[/\\]")
-    for _, folder in ipairs({ "gdriveplus", "gdrive" }) do
-        table.insert(paths, base .. "/" .. folder .. "/" .. filename)
-        if ko_dir then table.insert(paths, ko_dir .. folder .. "/" .. filename) end
-    end
-    table.insert(paths, plugin_dir .. filename)
+    add(base .. "/gdriveplus/" .. filename)
+    if ko_dir then add(ko_dir .. "gdriveplus/" .. filename) end
+    add(plugin_dir .. filename)
     return paths
 end
 
@@ -288,13 +316,20 @@ function GDrivePlus:loadRefreshTokenFromFile()
         return
     end
     local content = utils.read_file(found)
-    if content then
-        self.settings.refresh_token = (content:gsub("%s+", ""))
-        self.settings.access_token = ""
-        self.settings.token_expiry = 0
-        self:save()
-        self:info(_("Refresh token loaded."), 3)
+    if not content then
+        self:info(_("Cannot read:") .. "\n" .. found)
+        return
     end
+    local token = content:gsub("%s+", "")
+    if token == "" then
+        self:info(_("refresh_token.txt is empty:") .. "\n" .. found)
+        return
+    end
+    self.settings.refresh_token = token
+    self.settings.access_token = ""
+    self.settings.token_expiry = 0
+    self:save()
+    self:info(_("Refresh token loaded."), 3)
 end
 
 function GDrivePlus:clearAuth()

@@ -3,10 +3,11 @@
 ---     lua tests/test_core.lua
 
 package.path = "./?.lua;" .. package.path
+dofile("tests/foreign_modules.lua")
 
-local gjson = require("gjson")
-local annotations = require("annotations")
-local utils = require("utils")
+local gjson = require("gdriveplus_gjson")
+local annotations = require("gdriveplus_annotations")
+local utils = require("gdriveplus_utils")
 
 local passed, failed = 0, 0
 local function check(cond, name)

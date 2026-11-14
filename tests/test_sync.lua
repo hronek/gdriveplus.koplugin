@@ -1,8 +1,9 @@
---- End-to-end test of sync.lua against an in-memory fake of Google Drive and a
+--- End-to-end test of gdriveplus_sync.lua against an in-memory fake of Google Drive and a
 --- minimal fake of KOReader's reader UI.
 ---     lua tests/test_sync.lua
 
 package.path = "./?.lua;" .. package.path
+dofile("tests/foreign_modules.lua")
 
 -- KOReader stubs -------------------------------------------------------------
 local log = {}
@@ -18,10 +19,10 @@ package.preload["ui/uimanager"] = function()
     return { setDirty = function() end }
 end
 
-local gjson = require("gjson")
-local annotations = require("annotations")
-local utils = require("utils")
-local sync = require("sync")
+local gjson = require("gdriveplus_gjson")
+local annotations = require("gdriveplus_annotations")
+local utils = require("gdriveplus_utils")
+local sync = require("gdriveplus_sync")
 
 local passed, failed = 0, 0
 local function check(cond, name)
@@ -119,7 +120,7 @@ local function new_device(file_name, paging, list)
     return dev
 end
 
--- sync.lua writes "<sdr_dir>/gdriveplus.json"; make that a flat temp file name.
+-- gdriveplus_sync.lua writes "<sdr_dir>/gdriveplus.json"; make that a flat temp file name.
 sync.BASE_NAME = "base.json"
 local real_write, real_read = utils.write_file, utils.read_json
 local store = {}

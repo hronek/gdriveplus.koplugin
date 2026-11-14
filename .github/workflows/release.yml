@@ -31,7 +31,7 @@ jobs:
       - name: Package plugin
         run: |
           mkdir -p gdriveplus.koplugin
-          cp _meta.lua main.lua annotations.lua gjson.lua network.lua progress.lua sync.lua utils.lua LICENSE README.md SYNC_FORMAT.md gdriveplus.koplugin/
+          cp _meta.lua main.lua gdriveplus_annotations.lua gdriveplus_gjson.lua gdriveplus_network.lua gdriveplus_progress.lua gdriveplus_sync.lua gdriveplus_utils.lua LICENSE README.md SYNC_FORMAT.md gdriveplus.koplugin/
           zip -r gdriveplus.koplugin.zip gdriveplus.koplugin/
 
       - name: Create Release
