@@ -86,11 +86,13 @@ The two files give full access to your Google Drive. Keep them private.
 | Sync this book now | Merges annotations with Drive and pushes the reading position |
 | Push / Pull reading progress | Explicit one-way sync of the position |
 | Sync vocabulary | Newest copy of the vocabulary builder database wins |
+| Upload reading statistics | Copies this device's reading statistics to `KOReader_Sync/statistics/<device>.sqlite3`, where the web reader shows them together with its own |
 | Browse Google Drive | Download books to the device — from My Drive, *Shared with me*, shortcuts to shared folders and shared drives |
 
 With the default settings everything happens automatically when a book is
-opened (after 3 seconds) and closed, if Wi-Fi is on. *Sync this book now* is
-also available as a gesture action.
+opened (after 3 seconds) and closed, if Wi-Fi is on; the statistics are
+uploaded on closing a book at most twice a day. *Sync this book now* is also
+available as a gesture action.
 
 ## Troubleshooting
 

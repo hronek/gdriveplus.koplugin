@@ -24,6 +24,8 @@ local SETTINGS_KEY = "gdriveplus"
 local LEGACY_SETTINGS_KEY = "gdrive" -- settings of the original gdrive.koplugin
 local SYNC_FOLDER = "KOReader_Sync"
 local VOCAB_NAME = "vocabulary_builder.sqlite3"
+local STATS_NAME = "statistics.sqlite3"     -- KOReader's reading statistics
+local STATS_INTERVAL = 12 * 3600            -- upload at most twice a day automatically
 
 local GDrivePlus = WidgetContainer:extend{
     name = "gdriveplus",
@@ -42,6 +44,7 @@ GDrivePlus.default_settings = {
     auto_sync = true,       -- sync annotations when a book is opened/closed
     sync_progress = true,   -- pull progress on open, push on close
     sync_vocabulary = true, -- include the vocabulary builder database
+    upload_statistics = true, -- upload reading statistics (for the web reader), at most twice a day
     last_error = "",
 }
 
@@ -115,7 +118,8 @@ function GDrivePlus:addToMainMenu(menu_items)
             { text = _("Sync this book now"), callback = function() self:syncNow() end },
             { text = _("Push reading progress"), callback = function() self:pushProgress(true) end },
             { text = _("Pull reading progress"), callback = function() self:pullProgress(true) end },
-            { text = _("Sync vocabulary"), callback = function() self:syncVocabulary(true) end,
+            { text = _("Sync vocabulary"), callback = function() self:syncVocabulary(true) end },
+            { text = _("Upload reading statistics"), callback = function() self:uploadStatistics() end,
               separator = true },
             { text = _("Browse Google Drive"), callback = function() self.history = {}; self:browse() end,
               separator = true },
@@ -136,6 +140,11 @@ function GDrivePlus:addToMainMenu(menu_items)
                         text = _("Sync vocabulary on open/close"),
                         checked_func = function() return self.settings.sync_vocabulary end,
                         callback = function() self:toggle("sync_vocabulary") end,
+                    },
+                    {
+                        text = _("Upload reading statistics twice a day"),
+                        checked_func = function() return self.settings.upload_statistics end,
+                        callback = function() self:toggle("upload_statistics") end,
                         separator = true,
                     },
                     { text = _("Load client ID (client_id.json)"), callback = function() self:loadClientIDFromJson() end },
@@ -494,9 +503,73 @@ function GDrivePlus:doSyncVocabulary(token)
     return true, _("No vocabulary data found.")
 end
 
+--- File name of this device's statistics on Drive: "<model> <id>.sqlite3".
+function GDrivePlus:statisticsFileName()
+    local Device = require("device")
+    local model = (tostring(Device.model or "KOReader"):gsub('[\\/:*?"<>|]', "_"))
+    return model .. " " .. tostring(self.settings.device_id):sub(-6) .. ".sqlite3"
+end
+
+--- Upload KOReader's reading statistics database to KOReader_Sync/statistics/,
+--- one file per device, for the web reader to show. Never downloads: each
+--- device's statistics stay its own.
+--- @return ok, message
+function GDrivePlus:doUploadStatistics(token)
+    local path = DataStorage:getSettingsDir() .. "/" .. STATS_NAME
+    if lfs.attributes(path, "mode") ~= "file" then
+        return true, _("No reading statistics on this device.")
+    end
+    -- Fold the write-ahead log into the database file, so the upload has the
+    -- latest data. PASSIVE never waits for or disturbs other connections.
+    local cok, cerr = pcall(function()
+        local SQ3 = require("lua-ljsqlite3/init")
+        local conn = SQ3.open(path)
+        conn:exec("PRAGMA wal_checkpoint(PASSIVE);")
+        conn:close()
+    end)
+    if not cok then logger.warn("GDrivePlus: statistics checkpoint failed", cerr) end
+
+    local content = utils.read_file(path)
+    if not content then return false, "cannot read " .. STATS_NAME end
+    local folder_id, err = self:getFolder(token, "statistics")
+    if not folder_id then return false, err end
+    local name = self:statisticsFileName()
+    local id = self.settings.statistics_file_id
+    if not id then
+        local existing, ferr = network.findFile(token, name, { parent_id = folder_id })
+        if ferr then return false, ferr end
+        id = existing and existing.id
+    end
+    local args = { id = id, name = name, parent_id = folder_id, content = content, mime = "application/x-sqlite3" }
+    local new_id, uerr = network.upload(token, args)
+    if not new_id and id and tostring(uerr):find("404", 1, true) then
+        -- the file was deleted on Drive: create it again
+        args.id = nil
+        new_id, uerr = network.upload(token, args)
+    end
+    if not new_id then return false, uerr end
+    self.settings.statistics_file_id = new_id
+    self.settings.statistics_uploaded_at = os.time()
+    self:save()
+    return true, _("Reading statistics uploaded.")
+end
+
 -- ---------------------------------------------------------------------------
 -- Menu actions
 -- ---------------------------------------------------------------------------
+
+function GDrivePlus:uploadStatistics()
+    self:interactive(_("Uploading reading statistics…"), function()
+        local token, err = self:getToken()
+        if not token then return err end
+        local ok, msg = self:doUploadStatistics(token)
+        if not ok then
+            self:recordError("statistics", msg)
+            return _("Upload failed:") .. "\n" .. tostring(msg)
+        end
+        return msg, 3
+    end)
+end
 
 local function describe(stats)
     if stats.skipped_unchanged then return _("Nothing to sync.") end
@@ -634,6 +707,11 @@ function GDrivePlus:autoSync(closing)
         if self.settings.sync_vocabulary then
             local vok, verr = self:doSyncVocabulary(token)
             if not vok then self:recordError("vocabulary", verr) end
+        end
+        if closing and self.settings.upload_statistics
+            and os.time() - (tonumber(self.settings.statistics_uploaded_at) or 0) > STATS_INTERVAL then
+            local sok, serr = self:doUploadStatistics(token)
+            if not sok then self:recordError("statistics", serr) end
         end
     end, function(e)
         return tostring(e) .. "\n" .. debug.traceback()
