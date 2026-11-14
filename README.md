@@ -115,6 +115,11 @@ To release: bump `version` in `_meta.lua`, commit, and push a matching tag
 (`v1.0.1`). The workflow runs the tests and attaches `gdriveplus.koplugin.zip`
 to a GitHub Release, which is what Storefront and App Store install.
 
+## Support
+
+If the plugin is useful to you, you can support its development at
+[paypal.me/hronekjiri](https://paypal.me/hronekjiri).
+
 ## Licence
 
 MIT. Original work © 2025 moohaad; changes © 2026 Jiri Hronek.
