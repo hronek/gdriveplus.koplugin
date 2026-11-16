@@ -55,11 +55,13 @@ into KOReader's `plugins` folder:
 
 Restart KOReader. The plugin is under **Tools → Google Drive Plus**.
 
-**Updating**: delete the old `gdriveplus.koplugin` folder, copy in the new
-one and restart KOReader. Nothing has to be set up again: the credentials,
-the download folder and all options are stored in KOReader's own settings
-(`settings.reader.lua`), not in the plugin folder. The per-book sync state is
-kept with the book's own metadata (normally its `.sdr` folder).
+**Updating**: with Storefront, its *Updates* tab offers each new release. By
+hand, delete the old `gdriveplus.koplugin` folder, copy in the new one and
+restart KOReader. The installed version is shown at the bottom of *Settings*.
+Nothing has to be set up again: the credentials, the download folder and all
+options are stored in KOReader's own settings (`settings.reader.lua`), not in
+the plugin folder. The per-book sync state is kept with the book's own
+metadata (normally its `.sdr` folder).
 
 ## Set up Google access
 
@@ -180,9 +182,11 @@ luajit tests/test_core.lua
 luajit tests/test_sync.lua
 ```
 
-To release: bump `version` in `_meta.lua`, commit, and push a matching tag
-(`v1.0.1`). The workflow runs the tests and attaches `gdriveplus.koplugin.zip`
-to a GitHub Release, which is what Storefront and App Store install.
+To release: bump `version` in `_meta.lua`, add a `## X.Y.Z — date` section to
+[CHANGELOG.md](CHANGELOG.md), commit, and push a matching tag (`v1.1.0`). The
+workflow checks the tag against `_meta.lua`, runs the tests, and attaches
+`gdriveplus.koplugin.zip` to a GitHub Release whose text is that changelog
+section. The release is what Storefront and App Store install.
 
 ## Support
 

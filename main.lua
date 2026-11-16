@@ -280,7 +280,16 @@ function GDrivePlus:addToMainMenu(menu_items)
                         self:save()
                         self:info(_("Folder cache cleared."), 2)
                     end },
-                    { text = _("Clear credentials"), callback = function() self:clearAuth() end },
+                    { text = _("Clear credentials"), callback = function() self:clearAuth() end,
+                      separator = true },
+                    {
+                        text_func = function() return T(_("Version %1"), self:version()) end,
+                        keep_menu_open = true,
+                        callback = function()
+                            self:info(T(_("Google Drive Plus %1"), self:version())
+                                .. "\nhttps://github.com/hronek/gdriveplus.koplugin")
+                        end,
+                    },
                 },
             },
         },
@@ -379,6 +388,17 @@ function GDrivePlus:getPluginDir()
         return dir
     end
     return "./"
+end
+
+--- This plugin's version, from its _meta.lua (read once; "?" if unreadable).
+--- Not require()d: every plugin has a module called _meta.
+function GDrivePlus:version()
+    if self._version == nil then
+        local dir = self.path and (self.path .. "/") or self:getPluginDir()
+        local ok, meta = pcall(dofile, dir .. "_meta.lua")
+        self._version = ok and type(meta) == "table" and type(meta.version) == "string" and meta.version or false
+    end
+    return self._version or "?"
 end
 
 --- Places where client_id.json / refresh_token.txt are looked for: a `gdriveplus`
