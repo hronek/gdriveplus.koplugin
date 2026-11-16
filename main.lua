@@ -53,6 +53,8 @@ GDrivePlus.default_settings = {
     sync_progress = true,   -- pull progress on open/wake, push on close/sleep
     progress_interval = 2,  -- minutes between position pushes while reading (0 = only open/close/sleep/wake)
     confirm_jump = true,    -- ask before jumping to a newer position from another device
+    jump_only_newer = true, -- offer only positions saved after this device last read the book
+    jump_only_ahead = true, -- offer only positions further on in the book than the one here
     device_name = "",       -- shown to other devices and in the web reader; empty = the model name
     sync_vocabulary = true, -- include the vocabulary builder database
     upload_statistics = true, -- upload reading statistics (for the web reader), at most twice a day
@@ -225,10 +227,24 @@ function GDrivePlus:addToMainMenu(menu_items)
                         sub_item_table = self:progressIntervalMenu(),
                     },
                     {
-                        text = _("Ask before jumping to a position from another device"),
+                        text = _("Ask before taking over the position from another device"),
                         enabled_func = function() return self.settings.sync_progress end,
                         checked_func = function() return self.settings.confirm_jump end,
                         callback = function() self:toggle("confirm_jump") end,
+                    },
+                    {
+                        text = _("Offer only positions saved after my last reading here"),
+                        help_text = _("A position another device saved before you last read the book here is not offered."),
+                        enabled_func = function() return self.settings.sync_progress end,
+                        checked_func = function() return self.settings.jump_only_newer ~= false end,
+                        callback = function() self:toggle("jump_only_newer") end,
+                    },
+                    {
+                        text = _("Offer only positions further on in the book"),
+                        help_text = _("A position before yours is not offered, even when it was saved later (for example after leafing back on another device)."),
+                        enabled_func = function() return self.settings.sync_progress end,
+                        checked_func = function() return self.settings.jump_only_ahead ~= false end,
+                        callback = function() self:toggle("jump_only_ahead") end,
                     },
                     {
                         text = _("Sync vocabulary on open/close and sleep/wake"),
@@ -581,6 +597,9 @@ function GDrivePlus:doPullProgress(token, ctx, force)
     if not folder_id then return nil, err end
     ctx.folder_id = folder_id
     ctx.confirm = self.settings.confirm_jump
+    ctx.only_newer = self.settings.jump_only_newer ~= false
+    ctx.only_ahead = self.settings.jump_only_ahead ~= false
+    ctx.read_ts = self.last_read_turn -- reading offline here counts, though nothing was pushed
     -- Jumping to the pulled position turns the page; that is not the reader's doing
     -- and must not be pushed back (see positionChanged).
     self.applying_remote = true
@@ -666,7 +685,8 @@ function GDrivePlus:askJump(ctx, remote)
         cancel_callback = function()
             self.jump_dialog = nil
             if not (self.ui and self.ui.document) then return end
-            -- treat this remote position as seen; only a newer one asks again
+            -- never offer this record again; a newer one asks again
+            ctx.cache.declined_ts = ts
             ctx.cache.progress_ts = math.max(tonumber(ctx.cache.progress_ts) or 0, ts or 0)
             self:saveBookCache(ctx)
         end,
@@ -1125,6 +1145,7 @@ function GDrivePlus:positionChanged(kind, value)
     if first or not self.reader_ready then return end
     if self.applying_remote or os.time() - (self.remote_applied_at or 0) <= 2 then return end
     self.last_turn = os.time()
+    self.last_read_turn = self.last_turn
     self.progress_dirty = true
     self:schedulePeriodicPush()
     if not self.idle_scheduled then self:scheduleIdlePull() end

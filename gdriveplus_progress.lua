@@ -153,10 +153,27 @@ function M.describe(ui, pos)
     return info
 end
 
+--- Is `remote` further on in the book than `cur`? Unknown counts as yes, so a
+--- position is never hidden just because it cannot be compared.
+function M.is_ahead(ui, cur, remote)
+    local here, there = M.describe(ui, cur), M.describe(ui, remote)
+    if here.page and there.page and not here.approx and not there.approx then
+        return there.page > here.page
+    end
+    local a, b = tonumber(remote.percentage), cur and tonumber(cur.percentage)
+    if not a or not b then return true end
+    return a > b + 0.001
+end
+
 --- @param force  jump even when the remote position is older / from this device
---- When `ctx.confirm` is set (and not `force`), a newer position is not applied
+--- Without `force`, a position is offered only when it comes from another device,
+--- was not declined before, and (each can be switched off):
+---   ctx.only_newer ~= false: was saved after this device last read the book
+---     (the later of ctx.cache.progress_ts and ctx.read_ts, the last page turn);
+---   ctx.only_ahead: is further on in the book than the position here.
+--- When `ctx.confirm` is set (and not `force`), such a position is not applied
 --- but returned as "newer", remote, so the caller can ask first (then `M.apply`).
---- @return status ("moved" | "newer" | "same" | "older" | "none") — or nil, error
+--- @return status ("moved" | "newer" | "same" | "older" | "behind" | "none") — or nil, error
 function M.pull(network, token, ctx, force)
     local file, err = locate(network, token, ctx)
     if err then return nil, err end
@@ -179,7 +196,12 @@ function M.pull(network, token, ctx, force)
     if not force then
         if remote.device_id ~= nil and remote.device_id == ctx.device_id then return "same" end
         local remote_ts = tonumber(remote.timestamp) or 0
-        if remote_ts <= (tonumber(ctx.cache.progress_ts) or 0) then return "older" end
+        if remote_ts == tonumber(ctx.cache.declined_ts) then return "older" end -- "Stay here" before
+        if ctx.only_newer ~= false then
+            local read_here = math.max(tonumber(ctx.cache.progress_ts) or 0, tonumber(ctx.read_ts) or 0)
+            if remote_ts <= read_here then return "older" end
+        end
+        if ctx.only_ahead and not M.is_ahead(ctx.ui, cur, remote) then return "behind" end
     end
 
     if ctx.confirm and not force then return "newer", remote end

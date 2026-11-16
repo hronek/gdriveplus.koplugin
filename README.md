@@ -134,8 +134,18 @@ Before jumping to a position from another device, a dialog shows the device,
 when the position was saved, and both positions (page, percentage, chapter):
 *Go there* or *Stay here*. *Stay here* is not asked again for that position,
 only for a newer one. To jump without asking, turn off *Settings → Ask before
-jumping to a position from another device*. *Pull reading progress* in the
+taking over the position from another device*. *Pull reading progress* in the
 menu always jumps without asking.
+
+Which positions are offered at all (both on by default, as in the web reader):
+
+- *Offer only positions saved after my last reading here*: a position saved
+  elsewhere before you last turned a page, closed the book or put the device
+  to sleep here is not offered. Reading offline counts too.
+- *Offer only positions further on in the book*: a position before yours is
+  not offered, even when it was saved later, for example after leafing back
+  on another device. Pages are compared, or the percentage when a page is not
+  known.
 
 Each part can be switched off under *Settings*. Automatic sync never turns
 Wi-Fi on. If Wi-Fi is off when a book is opened or the device wakes up, the
