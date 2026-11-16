@@ -1,6 +1,8 @@
 # Changelog
 
-Each version's section is used as the text of its GitHub release.
+Each version's section is used as the text of its GitHub release. Changes not
+released yet go under `## Unreleased`; `release.cmd` turns that into the next
+version.
 
 ## 1.1.0 — 2026-11-16
 

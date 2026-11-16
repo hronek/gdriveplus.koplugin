@@ -182,11 +182,18 @@ luajit tests/test_core.lua
 luajit tests/test_sync.lua
 ```
 
-To release: bump `version` in `_meta.lua`, add a `## X.Y.Z — date` section to
-[CHANGELOG.md](CHANGELOG.md), commit, and push a matching tag (`v1.1.0`). The
-workflow checks the tag against `_meta.lua`, runs the tests, and attaches
-`gdriveplus.koplugin.zip` to a GitHub Release whose text is that changelog
-section. The release is what Storefront and App Store install.
+To release, double-click `release.cmd` (Windows). It works out the new
+version from what changed in the plugin since the last tag: major when the
+sync file format changes; minor for a new menu item, setting, automatic
+trigger or gesture action, or `### Added` / `### Changed` in the changelog;
+patch for any other code change. Documentation alone is not released. It sets the version in `_meta.lua`, turns the `## Unreleased`
+section of [CHANGELOG.md](CHANGELOG.md) into `## X.Y.Z — date` (or drafts
+one), shows all of it, and after *y* commits, tags `vX.Y.Z` and pushes. By
+hand: bump `version` in `_meta.lua`, add the changelog section, commit, and
+push a matching tag. The workflow checks the tag against `_meta.lua`, runs the
+tests, and attaches `gdriveplus.koplugin.zip` to a GitHub Release whose text
+is that changelog section. The release is what Storefront and App Store
+install.
 
 ## Support
 
