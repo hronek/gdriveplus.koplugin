@@ -177,5 +177,27 @@ eq(list[1].text, "first highlight", "sort: page 3, upper")
 eq(list[2].text, "two line highlight", "sort: page 3, lower")
 eq(list[3].text, "same x, other page", "sort: page 7")
 
+-- --- main.lua against _meta.lua -------------------------------------------
+-- KOReader's PluginLoader copies every _meta.lua field into the plugin object,
+-- replacing a method of the same name. 1.1.0 had GDrivePlus:version(), and
+-- drawing the Version item on Settings' second page crashed KOReader.
+do
+    local function read(path)
+        local f = assert(io.open(path, "rb"))
+        local s = f:read("*a")
+        f:close()
+        return s
+    end
+    local fields = {}
+    for key in read("_meta.lua"):gmatch("\n%s*([%a_][%w_]*)%s*=") do fields[key] = true end
+    check(fields.version and fields.fullname, "_meta.lua fields are found")
+    local methods = 0
+    for name in read("main.lua"):gmatch("function%s+GDrivePlus[:.]([%a_][%w_]*)") do
+        methods = methods + 1
+        check(not fields[name], "GDrivePlus:" .. name .. " would be replaced by the _meta.lua field " .. name)
+    end
+    check(methods > 20, "main.lua methods are found")
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

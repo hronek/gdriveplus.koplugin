@@ -218,11 +218,11 @@ function GDrivePlus:addToMainMenu(menu_items)
                         callback = function() self:toggle("sync_progress") end,
                     },
                     {
-                        text_func = function()
+                        text_func = self:safeText(function()
                             local m = tonumber(self.settings.progress_interval) or 0
                             if m == 0 then return _("Sync reading progress while reading: off") end
                             return T(_("Sync reading progress while reading: every %1 min"), m)
-                        end,
+                        end),
                         enabled_func = function() return self.settings.sync_progress end,
                         sub_item_table = self:progressIntervalMenu(),
                     },
@@ -258,7 +258,7 @@ function GDrivePlus:addToMainMenu(menu_items)
                         separator = true,
                     },
                     {
-                        text_func = function() return T(_("Device name: %1"), self:deviceName()) end,
+                        text_func = self:safeText(function() return T(_("Device name: %1"), self:deviceName()) end),
                         keep_menu_open = true,
                         callback = function(touchmenu_instance)
                             self:editDeviceName(function()
@@ -283,11 +283,13 @@ function GDrivePlus:addToMainMenu(menu_items)
                     { text = _("Clear credentials"), callback = function() self:clearAuth() end,
                       separator = true },
                     {
-                        text_func = function() return T(_("Version %1"), self:version()) end,
+                        text_func = self:safeText(function() return T(_("Version %1"), self:pluginVersion()) end),
                         keep_menu_open = true,
                         callback = function()
-                            self:info(T(_("Google Drive Plus %1"), self:version())
-                                .. "\nhttps://github.com/hronek/gdriveplus.koplugin")
+                            self:guarded("show version", function()
+                                return T(_("Google Drive Plus %1"), self:pluginVersion())
+                                    .. "\nhttps://github.com/hronek/gdriveplus.koplugin"
+                            end)
                         end,
                     },
                 },
@@ -354,6 +356,18 @@ function GDrivePlus:guarded(what, fn)
     self:showOutcome(what, runCaught(fn))
 end
 
+--- Wrap a menu item's text_func: KOReader calls it while drawing the menu, where
+--- an error takes the whole reader down. On an error the item reads "?" and the
+--- error goes to Settings → Show last error.
+function GDrivePlus:safeText(fn)
+    return function()
+        local ok, text = runCaught(fn)
+        if ok and type(text) == "string" then return text end
+        if not ok then self:recordError("menu text", text) end
+        return "?"
+    end
+end
+
 --- Run `fn` with a "working…" message, after making sure we are online.
 --- `fn` returns the text to show afterwards (or nil for nothing) and a timeout.
 function GDrivePlus:interactive(title, fn)
@@ -390,15 +404,20 @@ function GDrivePlus:getPluginDir()
     return "./"
 end
 
---- This plugin's version, from its _meta.lua (read once; "?" if unreadable).
---- Not require()d: every plugin has a module called _meta.
-function GDrivePlus:version()
-    if self._version == nil then
+--- This plugin's version. KOReader's PluginLoader copies every field of _meta.lua
+--- into the plugin, so `self.version` is already the string "X.Y.Z". (That is also
+--- why no method may be named like a _meta.lua field: 1.1.0 had a version()
+--- method, replaced by the string, and Settings crashed. tests/test_core.lua
+--- checks the names.) Read from _meta.lua itself when KOReader did not set it;
+--- not require()d, since every plugin has a module called _meta. "?" if unreadable.
+function GDrivePlus:pluginVersion()
+    if type(self.version) == "string" then return self.version end
+    if self._meta_version == nil then
         local dir = self.path and (self.path .. "/") or self:getPluginDir()
         local ok, meta = pcall(dofile, dir .. "_meta.lua")
-        self._version = ok and type(meta) == "table" and type(meta.version) == "string" and meta.version or false
+        self._meta_version = ok and type(meta) == "table" and type(meta.version) == "string" and meta.version or false
     end
-    return self._version or "?"
+    return self._meta_version or "?"
 end
 
 --- Places where client_id.json / refresh_token.txt are looked for: a `gdriveplus`

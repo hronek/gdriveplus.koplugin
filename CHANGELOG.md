@@ -4,6 +4,14 @@ Each version's section is used as the text of its GitHub release. Changes not
 released yet go under `## Unreleased`; `release.cmd` turns that into the next
 version.
 
+## 1.1.1 — 2026-11-16
+
+- Fixed: turning to the second page of *Settings* crashed KOReader (1.1.0,
+  on all devices). The new *Version* item called a function that KOReader
+  replaces with the version text from the plugin's `_meta.lua`.
+- A menu item whose text cannot be made now shows "?" and records the error
+  under *Show last error* instead of crashing KOReader.
+
 ## 1.1.0 — 2026-11-16
 
 - **Syncs while you read.** The reading position is pushed every 2 minutes
