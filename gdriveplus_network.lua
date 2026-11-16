@@ -19,6 +19,11 @@ M.SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 M.SHARED_WITH_ME = "sharedWithMe"
 -- Needed on every call so that files on shared drives are reachable.
 local ALL_DRIVES = "supportsAllDrives=true"
+--- Set while syncing in the background during reading (see main.lua `quietly`):
+--- small requests then use these timeouts (seconds) instead of the usual 10/30.
+M.short_timeouts = false
+M.SHORT_BLOCK_TIMEOUT = 5
+M.SHORT_TOTAL_TIMEOUT = 10
 
 local function api_error(body, code, status)
     local msg
@@ -60,6 +65,9 @@ function M.request(params)
         -- Whole files get the longer "file" timeouts; a stalled connection still gives up.
         if params.file_transfer then
             socketutil:set_timeout(socketutil.FILE_BLOCK_TIMEOUT, socketutil.FILE_TOTAL_TIMEOUT)
+        elseif M.short_timeouts then
+            -- Background work while the user reads: give up quickly rather than freeze.
+            socketutil:set_timeout(M.SHORT_BLOCK_TIMEOUT, M.SHORT_TOTAL_TIMEOUT)
         else
             socketutil:set_timeout(socketutil.LARGE_BLOCK_TIMEOUT, socketutil.LARGE_TOTAL_TIMEOUT)
         end

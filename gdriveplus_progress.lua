@@ -111,8 +111,52 @@ function M.push(network, token, ctx)
     return true
 end
 
+--- Jump to a pulled position (directly, or after the user agreed to it).
+--- @return true when the position could be used in this book
+function M.apply(ctx, remote)
+    if go_to(ctx.ui, remote) then
+        ctx.cache.progress_ts = os.time()
+        return true
+    end
+    return false
+end
+
+--- Page, page count, percentage and chapter of a position, for showing it.
+--- @param pos {progress, percentage}
+--- @return {page, pages, percent, chapter, approx}; any field may be missing
+function M.describe(ui, pos)
+    local doc = ui and ui.document
+    if not doc or type(pos) ~= "table" then return {} end
+    local info = {}
+    local ok, n = pcall(doc.getPageCount, doc)
+    if ok and type(n) == "number" then info.pages = n end
+    if ui.paging then
+        info.page = tonumber(pos.progress)
+    elseif type(pos.progress) == "string" and pos.progress ~= ""
+        and type(doc.getPageFromXPointer) == "function" then
+        local ok2, p = pcall(doc.getPageFromXPointer, doc, pos.progress)
+        if ok2 and type(p) == "number" then info.page = p end
+    end
+    local pct = tonumber(pos.percentage)
+    if pct then
+        info.percent = math.floor(pct * 100 + 0.5)
+        if not info.page and info.pages then
+            -- a writer without page or xpointer (e.g. the web reader on some formats)
+            info.page = math.max(1, math.floor(pct * info.pages + 0.5))
+            info.approx = true
+        end
+    end
+    if info.page and ui.toc and type(ui.toc.getTocTitleByPage) == "function" then
+        local ok3, title = pcall(ui.toc.getTocTitleByPage, ui.toc, info.page)
+        if ok3 and type(title) == "string" and title ~= "" then info.chapter = title end
+    end
+    return info
+end
+
 --- @param force  jump even when the remote position is older / from this device
---- @return status ("moved" | "same" | "older" | "none") — or nil, error
+--- When `ctx.confirm` is set (and not `force`), a newer position is not applied
+--- but returned as "newer", remote, so the caller can ask first (then `M.apply`).
+--- @return status ("moved" | "newer" | "same" | "older" | "none") — or nil, error
 function M.pull(network, token, ctx, force)
     local file, err = locate(network, token, ctx)
     if err then return nil, err end
@@ -138,10 +182,8 @@ function M.pull(network, token, ctx, force)
         if remote_ts <= (tonumber(ctx.cache.progress_ts) or 0) then return "older" end
     end
 
-    if go_to(ctx.ui, remote) then
-        ctx.cache.progress_ts = os.time()
-        return "moved", remote
-    end
+    if ctx.confirm and not force then return "newer", remote end
+    if M.apply(ctx, remote) then return "moved", remote end
     return nil, "remote position cannot be used"
 end
 

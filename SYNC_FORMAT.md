@@ -148,6 +148,9 @@ KOReader, so a faulty writer cannot break the reader.
 
 - `progress`: page number for paging books, xpointer for reflowable ones. A
   writer that cannot produce an xpointer omits it; `percentage` (0–1) is used.
+- `device`: a name for people, shown when another client offers to jump to
+  this position. The user's own name for the device (plugin *Settings → Device
+  name*), else its model. Identity is `device_id`, never `device`.
 - `timestamp`: Unix time of the write. On opening a book a client jumps only
   when the file comes from another `device_id` and is newer than the last time
   the book was open on this client.
