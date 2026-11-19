@@ -66,22 +66,38 @@ local function locate(network, token, ctx)
     return file
 end
 
+--- The content of a progress file (`version` is the progress file format).
+--- @param pos {progress, percentage, pages}
+--- @param ts  when the position was read (Unix time)
+function M.record(book, pos, ts, device, device_id)
+    return {
+        version = 2,
+        book = { file = book.file, partial_md5 = book.partial_md5 },
+        progress = pos.progress,
+        percentage = pos.percentage,
+        pages = pos.pages,
+        timestamp = ts,
+        device = device,
+        device_id = device_id,
+    }
+end
+
 --- @param ctx {ui, book, remote_name, folder_id, cache, device, device_id}
 --- @return true — or false, error
 function M.push(network, token, ctx)
     local cur = M.get_current(ctx.ui)
     if not cur then return false, "no reading position" end
-    local now = os.time()
-    local body = gjson.encode({
-        version = 2,
-        book = { file = ctx.book.file, partial_md5 = ctx.book.partial_md5 },
-        progress = cur.progress,
-        percentage = cur.percentage,
-        pages = cur.pages,
-        timestamp = now,
-        device = ctx.device,
-        device_id = ctx.device_id,
-    })
+    local ok, err = M.push_position(network, token, ctx, cur, os.time())
+    if not ok then return false, err end
+    logger.dbg("GDrivePlus: pushed progress", cur.percentage)
+    return true
+end
+
+--- Upload a given position (also for a book that is not open).
+--- @param ctx {book, remote_name, folder_id, cache, device, device_id}
+--- @return true, the uploaded JSON — or false, error
+function M.push_position(network, token, ctx, pos, ts)
+    local body = gjson.encode(M.record(ctx.book, pos, ts, ctx.device, ctx.device_id))
 
     local function put(id)
         return network.upload(token, {
@@ -106,9 +122,63 @@ function M.push(network, token, ctx)
     end
     if not id then return false, "upload: " .. tostring(err) end
     ctx.cache.prog_id = id
-    ctx.cache.progress_ts = now
-    logger.dbg("GDrivePlus: pushed progress", cur.percentage)
-    return true
+    ctx.cache.progress_ts = ts
+    return true, body
+end
+
+--- Download and decode a progress file.
+--- @return record — or nil, error, HTTP code
+function M.fetch(network, token, file_id)
+    local content, err, code = network.download(token, file_id)
+    if not content then return nil, "download: " .. tostring(err), code end
+    local remote = gjson.decode(content)
+    if type(remote) ~= "table" then return nil, "remote progress is not valid JSON" end
+    return remote
+end
+
+--- The remote position in the form this kind of book keeps it: a page number
+--- for paging books, an xpointer for reflowable ones; nil when the record has
+--- only a percentage (or the other kind of position).
+function M.usable_progress(remote, paging)
+    if type(remote) ~= "table" then return nil end
+    if paging then
+        local page = tonumber(remote.progress)
+        if page and page >= 1 then return math.floor(page) end
+    elseif type(remote.progress) == "string" and remote.progress ~= "" and not tonumber(remote.progress) then
+        return remote.progress
+    end
+    return nil
+end
+
+--- Same place in the book? Positions when both have one, else percentages.
+function M.same_position(a, b)
+    if a.progress ~= nil and b.progress ~= nil then return a.progress == b.progress end
+    local pa, pb = tonumber(a.percentage), tonumber(b.percentage)
+    return pa ~= nil and pb ~= nil and math.abs(pa - pb) < 0.0005
+end
+
+--- What to do with a book that is not open (library sync): the position here
+--- against the one on Drive. The newer one wins; clocks matter only when the
+--- positions differ.
+--- @param here     {progress, percentage} from the book's metadata, or nil
+--- @param here_ts  when the book was last read here (0/nil when unknown)
+--- @param remote   the progress record on Drive, or nil
+--- @param opts     {device_id, only_ahead}
+--- @return "push" | "apply" | "behind" | "same"
+function M.decide(here, here_ts, remote, opts)
+    here_ts = tonumber(here_ts) or 0
+    if type(remote) ~= "table" then return here and "push" or "same" end
+    if not here then return "apply" end -- also this device's own record: the metadata was reset
+    if M.same_position(here, remote) then return "same" end
+    local remote_ts = tonumber(remote.timestamp) or 0
+    if here_ts > remote_ts then return "push" end
+    if remote_ts == here_ts then return "same" end
+    if remote.device_id ~= nil and remote.device_id == opts.device_id then return "same" end
+    if opts.only_ahead then
+        local a, b = tonumber(remote.percentage), tonumber(here.percentage)
+        if a and b and a <= b + 0.001 then return "behind" end
+    end
+    return "apply"
 end
 
 --- Jump to a pulled position (directly, or after the user agreed to it).

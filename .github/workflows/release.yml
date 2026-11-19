@@ -39,11 +39,12 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq luajit
           luajit tests/test_core.lua
           luajit tests/test_sync.lua
+          luajit tests/test_library.lua
 
       - name: Package plugin
         run: |
           mkdir -p gdriveplus.koplugin
-          cp _meta.lua main.lua gdriveplus_annotations.lua gdriveplus_gjson.lua gdriveplus_network.lua gdriveplus_progress.lua gdriveplus_sync.lua gdriveplus_utils.lua LICENSE README.md CHANGELOG.md SYNC_FORMAT.md gdriveplus.koplugin/
+          cp _meta.lua main.lua gdriveplus_annotations.lua gdriveplus_gjson.lua gdriveplus_library.lua gdriveplus_network.lua gdriveplus_progress.lua gdriveplus_sync.lua gdriveplus_utils.lua LICENSE README.md CHANGELOG.md SYNC_FORMAT.md gdriveplus.koplugin/
           zip -r gdriveplus.koplugin.zip gdriveplus.koplugin/
 
       - name: Create Release

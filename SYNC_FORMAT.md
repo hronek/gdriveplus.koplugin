@@ -129,7 +129,19 @@ same annotation was edited on both sides between two syncs.
   that do not resolve.
 
 Entries that fail these checks stay in the file but are not loaded into
-KOReader, so a faulty writer cannot break the reader.
+KOReader, so a faulty writer cannot break the reader. A client that cannot
+show an entry must not take its absence from its reader for a deletion: it
+stays live in the file for the clients that can show it.
+
+### Books that are not open
+
+The plugin also syncs books that are not open (*library sync*), with the same
+files and the same merge. It reads and writes KOReader's metadata of the book:
+`annotations` (plus `annotations_externally_modified = true`, which makes
+KOReader sort and renumber them on opening), `last_xpointer` or `last_page`,
+and `percent_finished`. Without the document it cannot check EPUB xpointers;
+the entries it took over this way are checked when the book is next opened,
+and those that do not resolve are removed from the reader, not from the file.
 
 ## progress/*.json
 
@@ -151,9 +163,12 @@ KOReader, so a faulty writer cannot break the reader.
 - `device`: a name for people, shown when another client offers to jump to
   this position. The user's own name for the device (plugin *Settings → Device
   name*), else its model. Identity is `device_id`, never `device`.
-- `timestamp`: Unix time of the write. On opening a book a client jumps only
-  when the file comes from another `device_id` and is newer than the last time
-  the book was open on this client.
+- `timestamp`: Unix time the position was read: normally the time of the
+  write; a position read earlier and uploaded later (a book that is not open,
+  read while offline) carries the time it was read. On opening a book a client
+  jumps only when the file comes from another `device_id` and is newer than
+  the last time the book was open on this client. For books that are not
+  open, the newer of this file and the position on the device wins.
 
 ## Legacy files
 

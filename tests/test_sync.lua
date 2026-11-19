@@ -33,56 +33,7 @@ local function eq(a, b, name)
 end
 
 -- Fake Drive -----------------------------------------------------------------
-local function new_drive()
-    local drive = { files = {}, next_id = 1, requests = 0, fail_upload = false }
-    local net = {}
-    function net.findFile(_, name, opts)
-        drive.requests = drive.requests + 1
-        for id, f in pairs(drive.files) do
-            if f.name == name and f.parent == opts.parent_id then return { id = id, name = f.name } end
-        end
-        return nil
-    end
-    function net.findByProperty(_, key, value, parent)
-        drive.requests = drive.requests + 1
-        for id, f in pairs(drive.files) do
-            if f.parent == parent and f.props and f.props[key] == value then return { id = id, name = f.name } end
-        end
-        return nil
-    end
-    function net.download(_, id)
-        drive.requests = drive.requests + 1
-        local f = drive.files[id]
-        if not f then return nil, "HTTP 404: File not found", 404 end
-        return f.content, 200
-    end
-    function net.upload(_, args)
-        drive.requests = drive.requests + 1
-        if drive.fail_upload then return nil, "HTTP 500: backend error" end
-        local id = args.id
-        if id then
-            if not drive.files[id] then return nil, "HTTP 404: File not found" end
-        else
-            id = "id" .. drive.next_id
-            drive.next_id = drive.next_id + 1
-            drive.files[id] = { parent = args.parent_id }
-        end
-        local f = drive.files[id]
-        f.name, f.content, f.props = args.name, args.content, args.app_properties
-        return id
-    end
-    drive.net = net
-    function drive.put(name, content, props)
-        local id = "id" .. drive.next_id
-        drive.next_id = drive.next_id + 1
-        drive.files[id] = { name = name, content = content, parent = "ANN", props = props }
-        return id
-    end
-    function drive.by_name(name)
-        for id, f in pairs(drive.files) do if f.name == name then return f, id end end
-    end
-    return drive
-end
+local new_drive = dofile("tests/fake_drive.lua")
 
 -- Fake device ----------------------------------------------------------------
 local tmp_root = os.getenv("TEMP") or os.getenv("TMPDIR") or "."
@@ -240,6 +191,15 @@ ok = sync.run(drive.net, "tok", kobo.ctx())
 check(ok, "next sync succeeds")
 ok = sync.run(drive.net, "tok", kindle.ctx())
 eq(texts(kindle.ui.annotation.annotations), "b,c,d,e,web", "the change arrives after recovery")
+-- the entry neither device can show was never in a reader: it is not a deletion
+doc = gjson.decode(drive.files[id].content)
+local broken = doc.annotations["p2|1,1|2,2"]
+check(broken ~= nil and not broken.deleted, "an entry no device can show survives later syncs")
+before = drive.requests
+ctx = kobo.ctx(); ctx.only_if_changed = true
+ok, res = sync.run(drive.net, "tok", ctx)
+check(ok and res.skipped_unchanged, "an unshowable remote entry does not make every close sync")
+eq(drive.requests, before, "…and costs no request")
 
 -- 8. Unreadable remote file is never overwritten ------------------------------
 local bad_drive = new_drive()
@@ -284,6 +244,80 @@ ok, res = sync.run(epub_drive.net, "tok", ereader.ctx())
 check(ok, "EPUB sync succeeds")
 eq(texts(ereader.ui.annotation.annotations), "good", "only the resolvable xpointer is applied")
 eq(res.invalid, 1, "the unresolvable one is reported")
+local bad_key = "/body/DocFragment[2]/body/BAD[1]/text().0|/body/DocFragment[2]/body/BAD[1]/text().9"
+check(ereader.cache.unloadable and ereader.cache.unloadable[bad_key], "the unresolvable key is remembered")
+table.insert(ereader.ui.annotation.annotations,
+    epub("/body/DocFragment[3]/body/p[1]/text().0", "/body/DocFragment[3]/body/p[1]/text().5", "new"))
+ok = sync.run(epub_drive.net, "tok", ereader.ctx())
+check(ok, "second EPUB sync succeeds")
+local e_remote = gjson.decode(epub_drive.by_name("Kniha.epub.json").content)
+check(e_remote.annotations[bad_key] and not e_remote.annotations[bad_key].deleted,
+    "the unresolvable entry is not deleted for the other devices")
+
+-- 11b. Closed book (library sync): no document, written into its metadata --------
+local function closed_book(file_name, paging, list, cache)
+    sdr_counter = sdr_counter + 1
+    local dev = { settings = {}, cache = cache or {} }
+    dev.sdr = tmp_root .. "/gdriveplus_test_" .. os.time() .. "_" .. sdr_counter
+    dev.ui = {
+        annotation = { annotations = list or {} },
+        doc_settings = { saveSetting = function(_, k, v) dev.settings[k] = v end },
+    }
+    dev.ctx = function()
+        return {
+            ui = dev.ui, paging = paging, offline = true, sdr_dir = dev.sdr, folder_id = "ANN",
+            remote_name = file_name .. ".json", cache = dev.cache,
+            book = { file = file_name, partial_md5 = "e1", paging = paging },
+        }
+    end
+    return dev
+end
+local closed = closed_book("Kniha.epub", false)
+ok, res = sync.run(epub_drive.net, "tok", closed.ctx())
+check(ok and res.pulled, "closed EPUB takes over the remote annotations")
+eq(texts(closed.settings.annotations), "bad,good,new", "without the document no xpointer can be checked")
+eq(closed.settings.annotations_externally_modified, true, "KOReader is told to sort and renumber on opening")
+check(closed.cache.unverified and closed.cache.unverified[bad_key], "entries taken over are marked unverified")
+check(res.base_json ~= nil and store[closed.sdr .. "/base.json"] == nil, "the snapshot is left to the caller")
+sync.write_base(closed.sdr, res.base_json)
+
+-- …then the book is opened: the unverified entries are checked against the document
+local opened = new_device("Kniha.epub", false, closed.settings.annotations)
+opened.sdr, opened.cache = closed.sdr, closed.cache
+local octx = opened.ctx()
+octx.sdr_dir = closed.sdr
+ok, res = sync.run(epub_drive.net, "tok", octx)
+check(ok, "first sync of the opened book succeeds")
+eq(texts(opened.ui.annotation.annotations), "good,new", "the bad xpointer is removed from the reader")
+check(opened.cache.unverified == nil, "nothing is left unverified")
+check(opened.cache.unloadable and opened.cache.unloadable[bad_key], "the bad key is remembered")
+e_remote = gjson.decode(epub_drive.by_name("Kniha.epub.json").content)
+check(not e_remote.annotations[bad_key].deleted, "…and stays on Drive for the others")
+
+-- …and closed again: a library sync does not bring it back nor delete it
+local again = closed_book("Kniha.epub", false, opened.ui.annotation.annotations, opened.cache)
+again.sdr = closed.sdr
+local actx = again.ctx(); actx.sdr_dir = closed.sdr
+ok, res = sync.run(epub_drive.net, "tok", actx)
+check(ok and not res.pulled, "library sync of a known book changes nothing")
+check(again.settings.annotations == nil, "metadata not written")
+e_remote = gjson.decode(epub_drive.by_name("Kniha.epub.json").content)
+check(not e_remote.annotations[bad_key].deleted, "the bad entry is still not deleted")
+
+-- 11c. Closed PDF never opened here: sorted, title taken from Drive -------------------
+local t_drive = new_drive()
+local t_doc = annotations.build_doc({ file = "Titled.pdf", title = "Real Title", authors = "Someone" },
+    annotations.to_map({ pdf(9, 10, 10, "late"), pdf(2, 10, 10, "early") }))
+t_drive.put("Titled.pdf.json", gjson.encode(t_doc))
+local closed_pdf = closed_book("Titled.pdf", true)
+closed_pdf.settings = {}
+closed_pdf.ui.annotation.annotations = { pdf(5, 10, 10, "mine") }
+ok, res = sync.run(t_drive.net, "tok", closed_pdf.ctx())
+check(ok and res.pulled and res.pushed, "closed PDF merges both ways")
+eq(closed_pdf.settings.annotations[1].text, "early", "PDF annotations are sorted for KOReader")
+check(closed_pdf.cache.unverified == nil, "PDF entries need no later check")
+local t_remote = gjson.decode(t_drive.by_name("Titled.pdf.json").content)
+eq(t_remote.book.title, "Real Title", "the title is kept, not erased by a device without it")
 
 -- 12. A crash inside the merge is caught and logged ----------------------------
 local crash_dev = new_device("Moje kniha.pdf", true, { pdf(1, 1, 1, "x") })

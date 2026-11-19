@@ -23,6 +23,9 @@ This is a fork of [moohaad/gdrive.koplugin](https://github.com/moohaad/gdrive.ko
 - **Syncs while you read**, not only when a book is opened or closed: the
   position every few minutes, annotations shortly after each change, and
   everything on sleep and wake.
+- **Syncs the whole library**, not only the open book: books read elsewhere
+  get their annotations and position here without being opened (see
+  [Library sync](#library-sync)).
 - Reading progress only jumps to a *newer* position from *another* device, and
   asks first: it shows which device saved it and when, and where you are now
   against where you would go (page, percentage, chapter).
@@ -111,6 +114,7 @@ make a new token (steps 5–6) and *Load refresh token* again on each device.
 | Menu item | What it does |
 |---|---|
 | Sync this book now | Merges annotations with Drive and pushes the reading position |
+| Sync library | Does the same for every book in the home folder without opening it (see [Library sync](#library-sync)) |
 | Push / Pull reading progress | Explicit one-way sync of the position |
 | Sync vocabulary | Newest copy of the vocabulary builder database wins |
 | Upload reading statistics | Copies this device's reading statistics to `KOReader_Sync/statistics/<device>.sqlite3`, where the web reader shows them together with its own |
@@ -131,6 +135,7 @@ in the web reader. Empty means the model name (for example `Kobo_spaBW`).
 | 20 s after the last new or changed highlight, note or bookmark | Annotations are merged with Drive |
 | While reading, every 2 minutes (*Settings → Sync reading progress while reading*: 2, 5, 10, 15, 30 minutes, 1 hour or off) | The position is pushed 10 s after a page turn, while you read rather than touch the screen |
 | A book stays open on the same page for 2 minutes or more | Every interval it checks for a newer position from another device and offers to jump there; it stops after 2 hours without a page turn |
+| The file browser is shown (KOReader starts, a book is closed) or the device wakes up in it; at most every 10 minutes | Library sync of up to 25 changed books (*Settings → Sync the whole library automatically*) |
 
 Before jumping to a position from another device, a dialog shows the device,
 when the position was saved, and both positions (page, percentage, chapter):
@@ -161,6 +166,47 @@ page turns. Requests made while you read give up after 10 seconds on a bad
 connection. Dictionary lookups do not sync on their own: the vocabulary is a
 whole database file, uploaded at close or sleep.
 
+### Library sync
+
+With the same books in the home folder of every device, every book has the
+same annotations and the same reading position everywhere, also books not
+opened on this device for a while or ever.
+
+For each book in the home folder (and its subfolders) the library sync
+compares what KOReader keeps about the book here (its metadata, normally the
+`.sdr` folder next to it) with the files on Drive, without opening the book:
+
+- **Annotations** are merged both ways, exactly as for the open book. What
+  came from elsewhere is written into the book's metadata; KOReader sorts it
+  and works out its page numbers the next time the book is opened. EPUB
+  highlights are checked against the book at that point, and any that do not
+  fit this copy of the book are left out here (and kept on Drive).
+- **The reading position**: the newer one wins. A newer position from another
+  device is written into the metadata, so the book opens there; *Offer only
+  positions further on in the book* applies here too. A position from this
+  device that never reached Drive (Wi-Fi was off) is uploaded, stamped with
+  the time it was read. When the other device saved only a percentage (the
+  web reader on some formats), the progress shown is updated and the jump is
+  offered when the book is opened.
+- **A book read only elsewhere** gets its metadata here and is added to the
+  history at the time it was read. KOReader then shows it as being read,
+  with its progress, and annotation viewers list its highlights.
+
+The open book is left to its own sync. A book last opened with a KOReader
+older than 2024.07 keeps its annotations in an older format; open it once and
+KOReader converts them, then they sync too.
+
+*Sync library* in the menu runs it for all books, with progress (tap to
+stop) and a summary. Automatically it runs in the file browser, when Wi-Fi is
+on, for up to 25 books at a time; the rest follow next time. The first run
+looks at every book that has metadata or a file on Drive and can take a
+while. After that a book is only looked at when its file on Drive or its
+metadata changed, and a run with nothing to do costs two small requests. What was seen is kept in
+`gdriveplus_library.json` in KOReader's settings folder; deleting it makes
+the next run look at every book again.
+
+Books are matched by file name, like everything else in this plugin.
+
 ## Troubleshooting
 
 - **"Cannot get access token … invalid_grant"** — the refresh token expired or
@@ -180,6 +226,7 @@ and are tested on a PC:
 ```
 luajit tests/test_core.lua
 luajit tests/test_sync.lua
+luajit tests/test_library.lua
 ```
 
 To release, double-click `release.cmd` (Windows). It works out the new

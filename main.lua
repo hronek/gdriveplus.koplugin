@@ -15,6 +15,7 @@ local util = require("util")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
+local library = require("gdriveplus_library")
 local network = require("gdriveplus_network")
 local progress = require("gdriveplus_progress")
 local sync = require("gdriveplus_sync")
@@ -33,6 +34,11 @@ local PUSH_QUIET = 10                       -- while reading, push the position 
 local IDLE_PULL_AFTER = 2 * 60              -- a book left on one page this long looks for a newer position
 local IDLE_PULL_LIMIT = 2 * 3600            -- ... but not for longer than this
 local PROGRESS_INTERVALS = { 2, 5, 10, 15, 30, 60 } -- minutes, offered in Settings
+local LIBRARY_INDEX = "gdriveplus_library.json" -- in KOReader's settings folder
+local LIBRARY_START_DELAY = 5               -- seconds after the file browser shows up or the device wakes
+local LIBRARY_AUTO_GAP = 10 * 60            -- automatic library syncs at most this often
+local LIBRARY_AUTO_LIMIT = 25               -- books per automatic run; the rest follow next time
+local LIBRARY_STEP_PAUSE = 0.05             -- between two books, so the file browser stays usable
 
 local GDrivePlus = WidgetContainer:extend{
     name = "gdriveplus",
@@ -58,6 +64,7 @@ GDrivePlus.default_settings = {
     device_name = "",       -- shown to other devices and in the web reader; empty = the model name
     sync_vocabulary = true, -- include the vocabulary builder database
     upload_statistics = true, -- upload reading statistics (for the web reader), at most twice a day
+    sync_library = true,    -- sync the books that are not open, from the file browser
     last_error = "",
 }
 
@@ -95,10 +102,19 @@ function GDrivePlus:init()
     self.change_task = function() self:syncChangedAnnotations() end
     self.push_task = function() self:runPeriodicPush() end
     self.idle_task = function() self:runIdlePull() end
+    self.library_task = function() self:runLibraryStep() end
+    self.library_auto_task = function() self:runAutoLibrarySync() end
     self:onDispatcherRegisterActions()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+    -- KOReader started, or a book was closed: the file browser is shown
+    if self:inFileManager() then self:scheduleLibrarySync(LIBRARY_START_DELAY) end
+end
+
+--- This instance belongs to the file browser (KOReader makes one per screen).
+function GDrivePlus:inFileManager()
+    return self.ui ~= nil and self.ui.document == nil and self.ui.file_chooser ~= nil
 end
 
 function GDrivePlus:save()
@@ -191,6 +207,7 @@ function GDrivePlus:addToMainMenu(menu_items)
         sorting_hint = "tools",
         sub_item_table = {
             { text = _("Sync this book now"), callback = function() self:syncNow() end },
+            { text = _("Sync library"), callback = function() self:syncLibrary(true) end },
             { text = _("Push reading progress"), callback = function() self:pushProgress(true) end },
             { text = _("Pull reading progress"), callback = function() self:pullProgress(true) end },
             { text = _("Sync vocabulary"), callback = function() self:syncVocabulary(true) end },
@@ -245,6 +262,12 @@ function GDrivePlus:addToMainMenu(menu_items)
                         enabled_func = function() return self.settings.sync_progress end,
                         checked_func = function() return self.settings.jump_only_ahead ~= false end,
                         callback = function() self:toggle("jump_only_ahead") end,
+                    },
+                    {
+                        text = _("Sync the whole library automatically"),
+                        help_text = _("In the file browser (at start, after closing a book and on waking up, when Wi-Fi is on), the books in the home folder that are not open get the annotations and reading position from Google Drive, and Drive gets what changed here. A book read only on another device gets its metadata (.sdr) here, so it shows as being read and appears in the history."),
+                        checked_func = function() return self.settings.sync_library end,
+                        callback = function() self:toggle("sync_library") end,
                     },
                     {
                         text = _("Sync vocabulary on open/close and sleep/wake"),
@@ -1090,7 +1113,10 @@ end
 
 function GDrivePlus:onResume()
     self.left_at = nil -- reading again: the next sleep must push, however soon
-    if not (self.ui and self.ui.document) then return end
+    if not (self.ui and self.ui.document) then
+        if self:inFileManager() then self:scheduleLibrarySync(LIBRARY_START_DELAY) end
+        return
+    end
     self.last_turn = os.time()
     self:scheduleIdlePull()
     self:requestPull(3)
@@ -1101,6 +1127,18 @@ function GDrivePlus:onNetworkConnected()
         UIManager:unschedule(self.pull_task)
         UIManager:scheduleIn(2, self.pull_task)
     end
+    if self.library_wanted_until then
+        UIManager:unschedule(self.library_auto_task)
+        UIManager:scheduleIn(2, self.library_auto_task)
+    end
+end
+
+--- The file browser (or the reader) is closing: a library sync stops here and
+--- continues next time.
+function GDrivePlus:onCloseWidget()
+    UIManager:unschedule(self.library_auto_task)
+    self.library_wanted_until = nil
+    if self.library_run then self:finishLibraryRun("closing") end
 end
 
 --- A highlight, note or bookmark was added, changed or removed: sync once the
@@ -1253,6 +1291,291 @@ function GDrivePlus:runIdlePull()
                 or _("Moved to the synced position."), 3)
         end
     end)
+end
+
+-- ---------------------------------------------------------------------------
+-- Library sync: the books that are not open (see gdriveplus_library.lua)
+-- ---------------------------------------------------------------------------
+
+--- The folder whose books are synced: KOReader's home folder.
+--- @return path, or nil when none is set
+function GDrivePlus:libraryRoot()
+    local root
+    local ok, fmu = pcall(require, "apps/filemanager/filemanagerutil")
+    if ok and type(fmu.getHomeFolder) == "function" then root = fmu.getHomeFolder() end
+    root = root or G_reader_settings:readSetting("home_dir")
+    if type(root) ~= "string" or root == "" or root == "." then return nil end
+    if lfs.attributes(root, "mode") ~= "directory" then return nil end
+    return root
+end
+
+--- KOReader's side of a library sync: metadata files, history, document types.
+function GDrivePlus:libraryDocs()
+    local DocumentRegistry = require("document/documentregistry")
+    local ReadHistory = require("readhistory")
+    local realpath = require("ffi/util").realpath
+    local dom_checked, dom_latest, dom_normalized
+    local function history_entry(path)
+        local i = ReadHistory:getIndexByFile(realpath(path) or path)
+        return i and ReadHistory.hist[i]
+    end
+    return {
+        open = function(path)
+            local had = DocSettings:hasSidecarFile(path)
+            return DocSettings:open(path), had
+        end,
+        flush = function(ds) ds:flush() end,
+        sidecar_dir = function(path) return DocSettings:getSidecarDir(path) end,
+        sidecar_mtime = function(path)
+            local file = DocSettings:findSidecarFile(path)
+            return file and lfs.attributes(file, "modification") or nil
+        end,
+        paging = function(path)
+            local ok, provider = pcall(DocumentRegistry.getProvider, DocumentRegistry, path)
+            if not ok or type(provider) ~= "table" then return nil end
+            return provider.provider ~= "crengine"
+        end,
+        partial_md5 = function(path) return util.partialMD5(path) end,
+        -- crengine's DOM versions, without starting the engine (fonts and all)
+        dom_versions = function()
+            if not dom_checked then
+                dom_checked = true
+                local ok, cre = pcall(require, "libs/libkoreader-cre")
+                if ok and type(cre) == "table" then
+                    local ok1, latest = pcall(cre.getLatestDomVersion)
+                    local ok2, normalized = pcall(cre.getDomVersionWithNormalizedXPointers)
+                    dom_latest = ok1 and tonumber(latest) or nil
+                    dom_normalized = ok2 and tonumber(normalized) or nil
+                end
+            end
+            return dom_latest, dom_normalized
+        end,
+        history_time = function(path)
+            local entry = history_entry(path)
+            return entry and tonumber(entry.time) or nil
+        end,
+        add_history = function(path, ts) ReadHistory:addItem(path, ts) end,
+        changed = function(path)
+            pcall(function() require("ui/widget/booklist").resetBookInfoCache(path) end)
+        end,
+    }
+end
+
+function GDrivePlus:libraryIndexPath()
+    return DataStorage:getSettingsDir() .. "/" .. LIBRARY_INDEX
+end
+
+--- List Drive and the home folder and work out which books need syncing.
+--- @return run — or nil, error text
+function GDrivePlus:prepareLibraryRun(interactive)
+    local root = self:libraryRoot()
+    if not root then
+        return nil, _("No home folder is set. In the file browser, long-press a folder and choose \"Set as HOME folder\".")
+    end
+    local token, err = self:getToken()
+    if not token then
+        self:recordError("token", err)
+        return nil, err
+    end
+    local folders, listed = {}, {}
+    for _, which in ipairs({ "annotations", "progress" }) do
+        local id, ferr = self:getFolder(token, which)
+        if not id then return nil, ferr end
+        folders[which] = id
+        local files, lerr = network.listFolder(token, id)
+        if not files then
+            self:recordError("library sync", lerr)
+            return nil, _("Cannot list the sync folder:") .. " " .. tostring(lerr)
+        end
+        listed[which] = library.by_book(files)
+    end
+
+    local DocumentRegistry = require("document/documentregistry")
+    local books = library.scan(root, {
+        dir = function(path) return lfs.dir(path) end,
+        mode = function(path) return lfs.attributes(path, "mode") end,
+        is_book = function(path) return DocumentRegistry:hasProvider(path) end,
+    })
+    local docs = self:libraryDocs()
+    local index_path = self:libraryIndexPath()
+    local index = library.load_index(index_path)
+    library.prune(index, books)
+    local open_book = self.ui and self.ui.document and self.ui.document.file
+    local queue = library.plan({ ann = listed.annotations, prog = listed.progress },
+        books, index, docs.sidecar_mtime, open_book)
+    local md5
+    local ok_sha, sha2 = pcall(require, "ffi/sha2")
+    if ok_sha and type(sha2) == "table" and type(sha2.md5) == "function" then md5 = sha2.md5 end
+    return {
+        queue = queue, done = 0, books = #books, index = index, index_path = index_path,
+        interactive = interactive, limit = not interactive and LIBRARY_AUTO_LIMIT or nil,
+        pulled = 0, pushed = 0, failed = 0, notes = {},
+        deps = {
+            network = network, token = token, folders = folders,
+            device = self:deviceName(), device_id = self.settings.device_id,
+            only_ahead = self.settings.jump_only_ahead ~= false,
+            settings_key = SETTINGS_KEY, md5 = md5,
+            parse_time = function(s) return self:parseGDriveTime(s) end,
+            docs = docs,
+        },
+    }
+end
+
+--- Sync the books that are not open.
+--- @param interactive true for the menu item: progress, a summary, no book limit
+function GDrivePlus:syncLibrary(interactive)
+    local run = self.library_run
+    if run then
+        if interactive then
+            -- an automatic run is going on: show it and let it finish everything
+            run.interactive, run.limit = true, nil
+        end
+        return
+    end
+    local function start(prepared)
+        if #prepared.queue == 0 then
+            library.save_index(prepared.index_path, prepared.index)
+            self.settings.library_synced_at = os.time()
+            self:save()
+            return T(_("Library in sync: %1 books checked, nothing has changed."), prepared.books), 4
+        end
+        self.library_run = prepared
+        UIManager:scheduleIn(LIBRARY_STEP_PAUSE, self.library_task)
+    end
+    if interactive then
+        self:interactive(_("Looking for changes in the library…"), function()
+            local prepared, err = self:prepareLibraryRun(true)
+            if not prepared then return err end
+            return start(prepared)
+        end)
+    else
+        network.short_timeouts = true
+        local ok, err = runCaught(function()
+            local prepared = self:prepareLibraryRun(false)
+            if prepared then start(prepared) end
+        end)
+        network.short_timeouts = false
+        if not ok then self:recordError("library sync", err) end
+    end
+end
+
+function GDrivePlus:showLibraryProgress(run, item)
+    local old = run.msg
+    run.msg = InfoMessage:new{
+        text = T(_("Syncing library… %1 / %2"), run.done, #run.queue) .. "\n" .. item.name
+            .. "\n\n" .. _("Tap to stop."),
+        dismiss_callback = function()
+            run.msg = nil
+            run.cancelled = true
+        end,
+    }
+    if old then
+        old.dismiss_callback = nil
+        UIManager:close(old)
+    end
+    UIManager:show(run.msg)
+    UIManager:forceRePaint()
+end
+
+--- One book per call; the next one is scheduled, so the screen stays usable.
+function GDrivePlus:runLibraryStep()
+    local run = self.library_run
+    if not run then return end
+    if run.cancelled then return self:finishLibraryRun("cancelled") end
+    if run.done >= #run.queue then return self:finishLibraryRun("done") end
+    if run.limit and run.done >= run.limit then return self:finishLibraryRun("limit") end
+    if not isConnected() then return self:finishLibraryRun("offline") end
+
+    run.done = run.done + 1
+    local item = run.queue[run.done]
+    if run.interactive then self:showLibraryProgress(run, item) end
+    network.short_timeouts = not run.interactive
+    local ok, res = runCaught(function()
+        local token, err = self:getToken() -- renewed when it runs out during a long run
+        if not token then return { status = "failed", reason = err, notes = {} } end
+        run.deps.token = token
+        return library.process(item, run.deps)
+    end)
+    network.short_timeouts = false
+
+    if not ok or res.status == "failed" then
+        run.failed = run.failed + 1
+        self:recordError("library sync", item.name .. ": " .. tostring(ok and res.reason or res))
+    else
+        if res.pulled_annotations or res.pulled_position then run.pulled = run.pulled + 1 end
+        if res.pushed then run.pushed = run.pushed + 1 end
+        if res.index then run.index.books[item.path] = res.index end
+    end
+    for _, note in ipairs(ok and res.notes or {}) do
+        logger.info("GDrivePlus: library sync:", item.name, "-", note)
+        table.insert(run.notes, item.name .. ": " .. note)
+    end
+    if run.done % 10 == 0 then library.save_index(run.index_path, run.index) end
+    UIManager:scheduleIn(LIBRARY_STEP_PAUSE, self.library_task)
+end
+
+--- @param reason "done" | "limit" | "cancelled" | "offline" | "closing"
+function GDrivePlus:finishLibraryRun(reason)
+    local run = self.library_run
+    if not run then return end
+    self.library_run = nil
+    UIManager:unschedule(self.library_task)
+    if run.msg then
+        run.msg.dismiss_callback = nil
+        UIManager:close(run.msg)
+        run.msg = nil
+    end
+    library.save_index(run.index_path, run.index)
+    if reason == "done" or reason == "limit" then
+        self.settings.library_synced_at = os.time()
+        self:save()
+    end
+    if reason == "closing" then return end -- the screen is going away
+
+    if run.pulled > 0 then
+        -- progress bars and "being read" marks of the updated books
+        local ok_fm, FileManager = pcall(require, "apps/filemanager/filemanager")
+        if ok_fm and FileManager.instance then pcall(FileManager.instance.onRefresh, FileManager.instance) end
+    end
+    if run.interactive then
+        local lines = { reason == "cancelled" and _("Library sync stopped.")
+            or reason == "offline" and _("Library sync stopped: no network.")
+            or _("Library synced.") }
+        table.insert(lines, T(_("Books looked at: %1 of %2"), run.done, run.books))
+        if run.pulled > 0 then table.insert(lines, T(_("Updated from Google Drive: %1"), run.pulled)) end
+        if run.pushed > 0 then table.insert(lines, T(_("Uploaded to Google Drive: %1"), run.pushed)) end
+        if run.failed > 0 then
+            table.insert(lines, T(_("Failed: %1 (Settings → Show last error)"), run.failed))
+        end
+        for i = 1, math.min(#run.notes, 3) do table.insert(lines, run.notes[i]) end
+        if #run.notes > 3 then table.insert(lines, "…") end
+        self:info(table.concat(lines, "\n"))
+    elseif run.pulled > 0 then
+        local text = T(_("Library: %1 books updated from Google Drive."), run.pulled)
+        local ok_n = pcall(function() require("ui/widget/notification"):notify(text) end)
+        if not ok_n then self:info(text, 3) end
+    end
+end
+
+--- Automatic library sync from the file browser, once Wi-Fi is on (it is
+--- never switched on for this), at most every LIBRARY_AUTO_GAP.
+function GDrivePlus:scheduleLibrarySync(delay)
+    if not (self.settings.sync_library and self:isConfigured()) then return end
+    if os.time() - (tonumber(self.settings.library_synced_at) or 0) < LIBRARY_AUTO_GAP then return end
+    self.library_wanted_until = os.time() + PULL_WAIT
+    UIManager:unschedule(self.library_auto_task)
+    UIManager:scheduleIn(delay, self.library_auto_task)
+end
+
+function GDrivePlus:runAutoLibrarySync()
+    if not self.library_wanted_until then return end
+    if os.time() > self.library_wanted_until or self.library_run or not self:inFileManager() then
+        self.library_wanted_until = nil
+        return
+    end
+    if not isConnected() then return end -- tried again on NetworkConnected
+    self.library_wanted_until = nil
+    self:syncLibrary(false)
 end
 
 -- ---------------------------------------------------------------------------

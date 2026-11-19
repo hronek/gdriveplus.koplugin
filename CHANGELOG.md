@@ -4,6 +4,33 @@ Each version's section is used as the text of its GitHub release. Changes not
 released yet go under `## Unreleased`; `release.cmd` turns that into the next
 version.
 
+## 1.2.0 — 2026-11-19
+
+### Added
+
+- **Library sync: every book in the home folder, not only the open one.**
+  Books read on another device or in the web reader get their annotations
+  and reading position here without being opened. A book never opened on
+  this device gets its metadata (`.sdr`) and appears in the history, so the
+  file browser shows its progress and annotation viewers (such as
+  annotationsviewer.koplugin) list its highlights. The other way round,
+  what changed in a closed book here (a note edited in an annotation viewer,
+  a position not pushed because Wi-Fi was off) goes to Drive.
+  *Sync library* in the menu syncs everything at once. Automatically
+  (*Settings → Sync the whole library automatically*, on by default) it runs
+  in the file browser when KOReader starts, after a book is closed and on
+  waking up, when Wi-Fi is on, at most every 10 minutes, for up to 25 books
+  at a time, one book after the other so the file browser stays usable.
+  When nothing changed it costs two small requests.
+
+### Fixed
+
+- A remote annotation that a device could not show (its position not found
+  in that device's copy of the book, or a broken entry) was deleted for all
+  devices at that device's next sync. It now stays on Drive.
+- Closing a book in which an annotation had ever been deleted always made a
+  sync request, even when nothing had changed.
+
 ## 1.1.1 — 2026-11-16
 
 - Fixed: turning to the second page of *Settings* crashed KOReader (1.1.0,

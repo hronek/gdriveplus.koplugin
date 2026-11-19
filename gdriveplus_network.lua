@@ -183,6 +183,15 @@ function M.listFiles(token, folder_id)
     return files
 end
 
+--- All files of one sync folder, with what the library sync needs to tell
+--- whether a file changed. One request per 200 files.
+--- @return array of {id, name, md5Checksum, modifiedTime}, or nil + error
+function M.listFolder(token, folder_id)
+    local q = string.format("'%s' in parents and trashed = false and mimeType != '%s'",
+        utils.q_escape(folder_id), M.FOLDER_MIME)
+    return M.query(token, q, "id,name,md5Checksum,modifiedTime")
+end
+
 function M.createFolder(token, name, parent_id)
     local data, err = json_request({
         url = API .. "?fields=id&" .. ALL_DRIVES,
