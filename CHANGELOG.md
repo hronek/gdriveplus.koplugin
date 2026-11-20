@@ -4,6 +4,18 @@ Each version's section is used as the text of its GitHub release. Changes not
 released yet go under `## Unreleased`; `release.cmd` turns that into the next
 version.
 
+## 1.3.0 — 2026-11-20
+
+### Added
+
+- **Search Google Drive.** A magnifier in the title bar of *Browse Google
+  Drive*, and *Search Google Drive* in the plugin menu, find books and folders
+  by name anywhere on your Drive: My Drive, *Shared with me* and shared
+  drives. Google matches words from their start ("Hobbit" finds
+  "Tolkien - The Hobbit.epub"). Tap a book to download it or a folder to open
+  it; *Back* returns to the results and then to where the search started. The
+  plugin's own sync files are left out.
+
 ## 1.2.0 — 2026-11-19
 
 ### Added

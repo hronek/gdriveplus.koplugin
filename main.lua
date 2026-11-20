@@ -39,6 +39,7 @@ local LIBRARY_START_DELAY = 5               -- seconds after the file browser sh
 local LIBRARY_AUTO_GAP = 10 * 60            -- automatic library syncs at most this often
 local LIBRARY_AUTO_LIMIT = 25               -- books per automatic run; the rest follow next time
 local LIBRARY_STEP_PAUSE = 0.05             -- between two books, so the file browser stays usable
+local SEARCH_LIMIT = 200                    -- results shown by Search Google Drive
 
 local GDrivePlus = WidgetContainer:extend{
     name = "gdriveplus",
@@ -213,7 +214,8 @@ function GDrivePlus:addToMainMenu(menu_items)
             { text = _("Sync vocabulary"), callback = function() self:syncVocabulary(true) end },
             { text = _("Upload reading statistics"), callback = function() self:uploadStatistics() end,
               separator = true },
-            { text = _("Browse Google Drive"), callback = function() self.history = {}; self:browse() end,
+            { text = _("Browse Google Drive"), callback = function() self.history = {}; self:browse() end },
+            { text = _("Search Google Drive"), callback = function() self.history = {}; self:askSearch(nil) end,
               separator = true },
             {
                 text = _("Settings"),
@@ -1596,6 +1598,58 @@ function GDrivePlus:setDownloadDir()
     })
 end
 
+--- Leave the shown list for another one; Back returns to `here`, the shown
+--- list's history entry: { id =, name = } for a folder, { search = } for results.
+function GDrivePlus:openFrom(here, open)
+    table.insert(self.history, here)
+    UIManager:close(self.current_menu)
+    open()
+end
+
+--- Back to the folder or search results shown before.
+function GDrivePlus:goBack()
+    local last = table.remove(self.history)
+    if not last then return end
+    UIManager:close(self.current_menu)
+    if last.search then
+        self:search(last.search)
+    else
+        self:browse(last.id, last.name)
+    end
+end
+
+--- Show a list of Drive files: a folder or search results. Folders open, files
+--- download; the magnifier in the title bar searches the whole Drive.
+--- @param here  this list's history entry (see openFrom)
+--- @param extra_items  menu items shown before the files
+function GDrivePlus:showFileMenu(title, files, here, extra_items)
+    local items = {}
+    if #self.history > 0 then
+        table.insert(items, { text = _(".. [Back]"), callback = function() self:goBack() end })
+    end
+    for _, item in ipairs(extra_items or {}) do table.insert(items, item) end
+    for _, file in ipairs(files) do
+        local is_folder = file.mimeType == network.FOLDER_MIME
+        table.insert(items, {
+            text = (is_folder and "▸ " or "") .. tostring(file.name),
+            callback = function()
+                if is_folder then
+                    self:openFrom(here, function() self:browse(file.id, file.name) end)
+                else
+                    self:download(file)
+                end
+            end,
+        })
+    end
+    self.current_menu = Menu:new{
+        title = title,
+        item_table = items,
+        title_bar_left_icon = "appbar.search",
+        onLeftButtonTap = function() self:askSearch(here) end,
+    }
+    UIManager:show(self.current_menu)
+end
+
 function GDrivePlus:browse(folder_id, folder_name)
     self:interactive(_("Loading…"), function()
         local token, err = self:getToken()
@@ -1605,48 +1659,83 @@ function GDrivePlus:browse(folder_id, folder_name)
             self:recordError("browse", lerr)
             return _("Cannot list folder:") .. "\n" .. tostring(lerr)
         end
-        local items = {}
-        if #self.history > 0 then
-            table.insert(items, {
-                text = _(".. [Back]"),
-                callback = function()
-                    local last = table.remove(self.history)
-                    UIManager:close(self.current_menu)
-                    self:browse(last.id, last.name)
-                end,
-            })
-        end
+        local here = { id = folder_id, name = folder_name }
+        local extra
         if not folder_id then
             -- Items other people shared are not inside "My Drive"; offer them separately.
-            table.insert(items, {
+            extra = {{
                 text = "▸ " .. _("Shared with me"),
                 callback = function()
-                    table.insert(self.history, { id = folder_id, name = folder_name })
-                    UIManager:close(self.current_menu)
-                    self:browse(network.SHARED_WITH_ME, _("Shared with me"))
+                    self:openFrom(here, function() self:browse(network.SHARED_WITH_ME, _("Shared with me")) end)
                 end,
-            })
+            }}
         end
-        for _, file in ipairs(files) do
-            local is_folder = file.mimeType == network.FOLDER_MIME
-            table.insert(items, {
-                text = (is_folder and "▸ " or "") .. file.name,
+        self:showFileMenu(folder_name or _("Google Drive"), files, here, extra)
+        return nil
+    end)
+end
+
+--- Ask what to search for. `from` is the history entry of the list the search
+--- was started from (nil from the plugin menu): Back returns there.
+function GDrivePlus:askSearch(from)
+    local InputDialog = require("ui/widget/inputdialog")
+    local dialog
+    dialog = InputDialog:new{
+        title = _("Search Google Drive"),
+        input = self.last_search or "",
+        input_hint = _("Part of a book or folder name"),
+        description = _("Searches file and folder names in My Drive, Shared with me and shared drives. Words are matched from their start: \"Hobbit\" finds \"Tolkien - The Hobbit.epub\", \"bbit\" does not."),
+        buttons = {{
+            {
+                text = _("Cancel"),
+                id = "close",
+                callback = function() UIManager:close(dialog) end,
+            },
+            {
+                text = _("Search"),
+                is_enter_default = true,
                 callback = function()
-                    if is_folder then
-                        table.insert(self.history, { id = folder_id, name = folder_name })
-                        UIManager:close(self.current_menu)
-                        self:browse(file.id, file.name)
-                    else
-                        self:download(file)
-                    end
+                    local text = dialog:getInputText():gsub("^%s+", ""):gsub("%s+$", "")
+                    if text == "" then return end
+                    UIManager:close(dialog)
+                    self.last_search = text
+                    self:search(text, from)
                 end,
-            })
+            },
+        }},
+    }
+    UIManager:show(dialog)
+    dialog:onShowKeyboard()
+end
+
+--- Search the whole Drive by name and show the results. When nothing is found
+--- the list the search was started from stays open.
+function GDrivePlus:search(text, from)
+    self:interactive(_("Searching…"), function()
+        local token, err = self:getToken()
+        if not token then return err end
+        -- The plugin's own files (Book.epub.json, …) are not books to download.
+        local sync_folders = {}
+        if type(self.settings.folders) == "table" then
+            for _, id in pairs(self.settings.folders) do sync_folders[id] = true end
         end
-        self.current_menu = Menu:new{
-            title = folder_name or _("Google Drive"),
-            item_table = items,
-        }
-        UIManager:show(self.current_menu)
+        local files, truncated = network.searchFiles(token, text,
+            { limit = SEARCH_LIMIT, exclude_parents = sync_folders })
+        if not files then
+            self:recordError("search", truncated)
+            return _("Search failed:") .. "\n" .. tostring(truncated)
+        end
+        if #files == 0 then
+            return T(_("Nothing found for \"%1\"."), text), 3
+        end
+        if from then
+            -- Started from a shown list (else from the plugin menu, or Back closed it).
+            table.insert(self.history, from)
+            UIManager:close(self.current_menu)
+        end
+        local title = truncated and T(_("Search: %1 (first %2)"), text, SEARCH_LIMIT)
+            or T(_("Search: %1"), text)
+        self:showFileMenu(title, files, { search = text })
         return nil
     end)
 end

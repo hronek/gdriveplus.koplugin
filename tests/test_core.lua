@@ -199,5 +199,89 @@ do
     check(methods > 20, "main.lua methods are found")
 end
 
+-- --- Drive search and folder listing (files.list stubbed) -----------------
+do
+    package.preload["ltn12"] = function() return { sink = {}, source = {} } end -- only request() uses it
+    local network = require("gdriveplus_network")
+    local real_query = network.query
+    local calls = {}
+    local reply = {}
+    network.query = function(token, q, fields, order_by, max_items, corpora)
+        calls[#calls + 1] = { token = token, q = q, fields = fields, order_by = order_by,
+            max_items = max_items, corpora = corpora }
+        local copy = {}
+        for i, f in ipairs(reply) do
+            copy[i] = {}
+            for k, v in pairs(f) do copy[i][k] = v end
+        end
+        return copy
+    end
+
+    reply = {
+        { id = "d1", name = "Hobit", mimeType = network.FOLDER_MIME, parents = { "root" } },
+        { id = "f1", name = "Hobit.epub", mimeType = "application/epub+zip", parents = { "d1" } },
+        { id = "s1", name = "Hobit (shortcut)", mimeType = network.SHORTCUT_MIME, parents = { "root" },
+          shortcutDetails = { targetId = "f1", targetMimeType = "application/epub+zip" } },
+        { id = "s2", name = "Shared Hobit", mimeType = network.SHORTCUT_MIME, parents = { "root" },
+          shortcutDetails = { targetId = "d9", targetMimeType = network.FOLDER_MIME } },
+        { id = "j1", name = "Hobit.epub.json", mimeType = "application/json", parents = { "sync_ann" } },
+        { id = "n1", name = "No parents.pdf", mimeType = "application/pdf" },
+    }
+    local files, truncated = network.searchFiles("tok", "it's", { limit = 200, exclude_parents = { sync_ann = true } })
+    local c = calls[#calls]
+    eq(c.q, "name contains 'it\\'s' and trashed = false", "search query escapes the text")
+    eq(c.corpora, "allDrives", "search includes shared drives")
+    eq(c.order_by, "folder,name", "search lists folders first")
+    eq(c.max_items, 200, "search passes the limit")
+    check(c.fields:find("parents", 1, true) and c.fields:find("shortcutDetails", 1, true), "search asks for parents and shortcuts")
+    local ids = {}
+    for _, f in ipairs(files) do ids[#ids + 1] = f.id end
+    eq(table.concat(ids, ","), "d1,f1,d9,n1", "search: shortcut resolved, duplicate and sync file left out")
+    eq(files[3].mimeType, network.FOLDER_MIME, "shortcut to a folder opens as a folder")
+    eq(truncated, false, "fewer results than the limit")
+
+    reply = { { id = "a", name = "A" }, { id = "b", name = "B" } }
+    local _, hit = network.searchFiles("tok", "x", { limit = 2 })
+    eq(hit, true, "limit reached is reported")
+    local plain = network.searchFiles("tok", "x")
+    eq(#plain, 2, "search works without options")
+    eq(calls[#calls].max_items, nil, "no limit without options")
+
+    reply = {
+        { id = "s1", name = "Shared", mimeType = network.SHORTCUT_MIME,
+          shortcutDetails = { targetId = "d9", targetMimeType = network.FOLDER_MIME } },
+        { id = "f1", name = "Book.pdf", mimeType = "application/pdf" },
+    }
+    local listed = network.listFiles("tok", "folder'1")
+    eq(calls[#calls].q, "'folder\\'1' in parents and trashed = false", "listFiles query")
+    eq(calls[#calls].corpora, nil, "listFiles keeps the default corpora")
+    eq(listed[1].id .. " " .. listed[1].mimeType, "d9 " .. network.FOLDER_MIME, "listFiles resolves shortcuts")
+    eq(listed[2].id, "f1", "listFiles keeps plain files")
+    eq(network.listFiles("tok", network.SHARED_WITH_ME) and calls[#calls].q,
+        "sharedWithMe = true and trashed = false", "listFiles shared with me")
+
+    network.query = real_query
+
+    -- query(): paging, the limit and corpora in the URL (HTTP stubbed)
+    local real_request = network.request
+    local urls = {}
+    network.request = function(params)
+        urls[#urls + 1] = params.url
+        local page = {}
+        for i = 1, 150 do page[i] = { id = tostring(#urls * 1000 + i) } end
+        return gjson.encode({ files = page, nextPageToken = #urls < 3 and ("p" .. #urls) or nil }), 200
+    end
+    local got = network.query("tok", "name contains 'x'", nil, "folder,name", 200, "allDrives")
+    eq(#got, 200, "query stops at the limit and trims to it")
+    eq(#urls, 2, "query fetches only the pages it needs")
+    check(urls[1]:find("&corpora=allDrives", 1, true), "query sends corpora")
+    check(urls[2]:find("&pageToken=p1", 1, true), "query follows nextPageToken")
+    urls = {}
+    got = network.query("tok", "q")
+    eq(#got, 450, "query without a limit reads every page")
+    check(not urls[1]:find("corpora", 1, true), "no corpora unless asked")
+    network.request = real_request
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

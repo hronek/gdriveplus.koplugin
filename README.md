@@ -119,8 +119,15 @@ make a new token (steps 5–6) and *Load refresh token* again on each device.
 | Sync vocabulary | Newest copy of the vocabulary builder database wins |
 | Upload reading statistics | Copies this device's reading statistics to `KOReader_Sync/statistics/<device>.sqlite3`, where the web reader shows them together with its own |
 | Browse Google Drive | Download books to the device — from My Drive, *Shared with me*, shortcuts to shared folders and shared drives |
+| Search Google Drive | Finds books and folders by name anywhere on your Drive (My Drive, *Shared with me*, shared drives) and downloads them; also the magnifier in the title bar while browsing |
 
 *Sync this book now* is also available as a gesture action.
+
+*Search Google Drive* looks at file and folder names only. Google matches
+words from their start: `Hobbit` finds `Tolkien - The Hobbit.epub`, `bbit`
+does not. Up to 200 results are shown, folders first; a folder opens as in
+*Browse*, and *Back* returns to the results and then to the folder the search
+was started from. The plugin's own sync files are not listed.
 
 *Settings → Device name* sets what your other devices call this one when they
 offer to jump to the position you left, and the name of its reading statistics

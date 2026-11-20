@@ -119,14 +119,16 @@ function M.refreshToken(client_id, client_secret, refresh_token)
 end
 
 --- Run a files.list query, following nextPageToken.
---- @return array of files, or nil + error
-function M.query(token, q, fields, order_by, max_items)
+--- @param corpora  nil (My Drive and shared with me) or "allDrives" (also shared drives)
+--- @return array of at most max_items files, or nil + error
+function M.query(token, q, fields, order_by, max_items, corpora)
     local files = {}
     local page_token
     repeat
         local url = API .. "?pageSize=200&spaces=drive&includeItemsFromAllDrives=true&" .. ALL_DRIVES
             .. "&fields=" .. utils.urlencode("nextPageToken,files(" .. (fields or "id,name,mimeType,modifiedTime,size") .. ")")
             .. "&q=" .. utils.urlencode(q)
+        if corpora then url = url .. "&corpora=" .. utils.urlencode(corpora) end
         if order_by then url = url .. "&orderBy=" .. utils.urlencode(order_by) end
         if page_token then url = url .. "&pageToken=" .. utils.urlencode(page_token) end
         local data, err = json_request({ url = url, headers = auth(token) })
@@ -134,6 +136,9 @@ function M.query(token, q, fields, order_by, max_items)
         for _, f in ipairs(data.files or {}) do files[#files + 1] = f end
         page_token = data.nextPageToken
     until not page_token or (max_items and #files >= max_items)
+    if max_items then
+        for i = #files, max_items + 1, -1 do files[i] = nil end
+    end
     return files
 end
 
@@ -160,9 +165,22 @@ function M.findByProperty(token, key, value, parent_id)
     return files[1]
 end
 
---- List a folder. Shortcuts are resolved to the file or folder they point to,
---- so folders shared by other people (which appear in My Drive only as
---- shortcuts) can be opened like any other folder.
+local BROWSE_FIELDS = "id,name,mimeType,size,shortcutDetails(targetId,targetMimeType)"
+
+--- Replace each shortcut by the file or folder it points to, so folders shared
+--- by other people (which appear in My Drive only as shortcuts) can be opened
+--- like any other folder.
+local function resolve_shortcuts(files)
+    for _, f in ipairs(files) do
+        local target = f.mimeType == M.SHORTCUT_MIME and f.shortcutDetails
+        if type(target) == "table" and target.targetId then
+            f.id, f.mimeType = target.targetId, target.targetMimeType
+        end
+    end
+    return files
+end
+
+--- List a folder, folders first. Shortcuts are resolved.
 --- @param folder_id  nil/"root" for My Drive, M.SHARED_WITH_ME for shared items
 function M.listFiles(token, folder_id)
     local q
@@ -171,16 +189,37 @@ function M.listFiles(token, folder_id)
     else
         q = string.format("'%s' in parents and trashed = false", utils.q_escape(folder_id or "root"))
     end
-    local files, err = M.query(token, q,
-        "id,name,mimeType,size,shortcutDetails(targetId,targetMimeType)", "folder,name")
+    local files, err = M.query(token, q, BROWSE_FIELDS, "folder,name")
     if not files then return nil, err end
+    return resolve_shortcuts(files)
+end
+
+--- Search the whole Drive (My Drive, shared with me, shared drives) for files
+--- and folders whose name contains `text`. Google matches from the start of
+--- words: "Hobit" finds "Tolkien - Hobit.epub", "bit" does not. Folders come
+--- first; shortcuts are resolved and a file reached twice is listed once.
+--- @param opts {limit=, exclude_parents={[folder id]=true}} files directly in
+---             one of exclude_parents are left out
+--- @return array of files and whether the limit was reached, or nil + error
+function M.searchFiles(token, text, opts)
+    opts = opts or {}
+    local q = string.format("name contains '%s' and trashed = false", utils.q_escape(text))
+    local files, err = M.query(token, q, BROWSE_FIELDS .. ",parents", "folder,name", opts.limit, "allDrives")
+    if not files then return nil, err end
+    resolve_shortcuts(files)
+    local exclude = opts.exclude_parents or {}
+    local seen, result = {}, {}
     for _, f in ipairs(files) do
-        local target = f.mimeType == M.SHORTCUT_MIME and f.shortcutDetails
-        if type(target) == "table" and target.targetId then
-            f.id, f.mimeType = target.targetId, target.targetMimeType
+        local excluded = false
+        for _, parent in ipairs(type(f.parents) == "table" and f.parents or {}) do
+            if exclude[parent] then excluded = true end
+        end
+        if not excluded and f.id and not seen[f.id] then
+            seen[f.id] = true
+            result[#result + 1] = f
         end
     end
-    return files
+    return result, opts.limit ~= nil and #files >= opts.limit
 end
 
 --- All files of one sync folder, with what the library sync needs to tell
